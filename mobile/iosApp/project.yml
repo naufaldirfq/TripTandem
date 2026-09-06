@@ -1,0 +1,171 @@
+name: TripTandem
+
+options:
+  bundleIdPrefix: com.triptandem
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+packages:
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk
+    from: 11.3.1
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 9.2.0
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_ENABLE_EXPLICIT_MODULES: NO
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    CLANG_ENABLE_MODULES: YES
+    CLANG_ENABLE_OBJC_ARC: YES
+    OTHER_LDFLAGS:
+      - "$(inherited)"
+      - "-ObjC"
+      - "-framework"
+      - "TripTandemShared"
+
+targets:
+  TripTandem:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    entitlements:
+      path: TripTandem/TripTandem.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
+    sources:
+      - path: TripTandem
+    resources:
+      - path: GoogleService-Info.plist
+    dependencies:
+      - sdk: SwiftUI.framework
+      - sdk: UIKit.framework
+      - package: Firebase
+        product: FirebaseAnalytics
+      - package: Firebase
+        product: FirebaseAuth
+      - package: Firebase
+        product: FirebaseCore
+      - package: Firebase
+        product: FirebaseCrashlytics
+      - package: Firebase
+        product: FirebasePerformance
+      - package: Firebase
+        product: FirebaseFirestore
+      - package: Firebase
+        product: FirebaseFunctions
+      - package: Firebase
+        product: FirebaseRemoteConfig
+      - package: GoogleSignIn
+        product: GoogleSignIn
+    preBuildScripts:
+      - name: Build KMP shared framework
+        basedOnDependencyAnalysis: false
+        showEnvVarsInLog: false
+        script: |
+          set -eu
+
+          if [ "${PLATFORM_NAME}" = "iphonesimulator" ]; then
+            KMP_TARGET="IosSimulatorArm64"
+            KMP_ARCH="iosSimulatorArm64"
+            KMP_RESOURCES_TASK="iosSimulatorArm64AggregateResources"
+          else
+            KMP_TARGET="IosArm64"
+            KMP_ARCH="iosArm64"
+            KMP_RESOURCES_TASK="iosArm64AggregateResources"
+          fi
+
+          if [ "${CONFIGURATION}" = "Release" ]; then
+            KMP_CONFIGURATION="Release"
+            KMP_FRAMEWORK_CONFIGURATION="releaseFramework"
+          else
+            KMP_CONFIGURATION="Debug"
+            KMP_FRAMEWORK_CONFIGURATION="debugFramework"
+          fi
+
+          cd "${SRCROOT}/.."
+          DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" \
+            ./gradlew --no-daemon --no-configuration-cache \
+            ":shared:link${KMP_CONFIGURATION}Framework${KMP_TARGET}" \
+            ":shared:${KMP_RESOURCES_TASK}"
+
+          test -d "shared/build/bin/${KMP_ARCH}/${KMP_FRAMEWORK_CONFIGURATION}/TripTandemShared.framework"
+    postBuildScripts:
+      - name: Copy Firebase configuration
+        basedOnDependencyAnalysis: false
+        showEnvVarsInLog: false
+        script: |
+          set -eu
+          cp "${SRCROOT}/GoogleService-Info.plist" \
+            "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/GoogleService-Info.plist"
+          if [ "${PLATFORM_NAME}" = "iphonesimulator" ]; then
+            KMP_RESOURCE_ARCH="iosSimulatorArm64"
+          else
+            KMP_RESOURCE_ARCH="iosArm64"
+          fi
+          KMP_RESOURCES="${SRCROOT}/../shared/build/kotlin-multiplatform-resources/aggregated-resources/${KMP_RESOURCE_ARCH}/composeResources"
+          KMP_RESOURCE_DEST="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/compose-resources/composeResources"
+          test -d "${KMP_RESOURCES}"
+          mkdir -p "${KMP_RESOURCE_DEST}"
+          cp -R "${KMP_RESOURCES}/." "${KMP_RESOURCE_DEST}/"
+      - name: Upload dSYMs to Firebase Crashlytics
+        basedOnDependencyAnalysis: false
+        showEnvVarsInLog: false
+        inputFiles:
+          - "${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}"
+          - "${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}"
+          - "${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist"
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist"
+          - "$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)"
+          - "${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}.debug.dylib"
+        script: |
+          set -eu
+          if [ "${CONFIGURATION}" != "Release" ]; then
+            echo "Skipping Crashlytics symbol upload for ${CONFIGURATION}."
+            exit 0
+          fi
+          CRASHLYTICS_RUN="${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run"
+          if [ -x "${CRASHLYTICS_RUN}" ]; then
+            "${CRASHLYTICS_RUN}"
+          else
+            echo "warning: Firebase Crashlytics run script was not found at ${CRASHLYTICS_RUN}"
+          fi
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.triptandem
+        PRODUCT_NAME: TripTandem
+        INFOPLIST_FILE: TripTandem/Info.plist
+        CODE_SIGN_ENTITLEMENTS: TripTandem/TripTandem.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.0"
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../shared/build/bin/iosSimulatorArm64/debugFramework"
+          - "$(SRCROOT)/../shared/build/bin/iosSimulatorArm64/releaseFramework"
+          - "$(SRCROOT)/../shared/build/bin/iosArm64/debugFramework"
+          - "$(SRCROOT)/../shared/build/bin/iosArm64/releaseFramework"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+    configFiles:
+      Debug: TripTandem/Signing.Debug.xcconfig
+      Release: TripTandem/Signing.Release.xcconfig

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<defaultsMap>
+    <entry>
+        <key>ai_generation_enabled</key>
+        <value>false</value>
+    </entry>
+    <entry>
+        <key>open_trip_publishing_enabled</key>
+        <value>false</value>
+    </entry>
+    <entry>
+        <key>discovery_enabled</key>
+        <value>false</value>
+    </entry>
+    <entry>
+        <key>join_requests_enabled</key>
+        <value>false</value>
+    </entry>
+    <entry>
+        <key>push_enabled</key>
+        <value>false</value>
+    </entry>
+</defaultsMap>

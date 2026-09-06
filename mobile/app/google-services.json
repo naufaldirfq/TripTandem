@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "405464191304",
+    "project_id": "triptandem",
+    "storage_bucket": "triptandem.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:405464191304:android:b4c93e514fc50e909ca37d",
+        "android_client_info": {
+          "package_name": "com.triptandem"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "405464191304-h5qrnjq6r5dq3on6btuv1la9e8ei1a4m.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.triptandem",
+            "certificate_hash": "f830a2ead1363323bf2b0b1b2150f1f5f63aca6d"
+          }
+        },
+        {
+          "client_id": "405464191304-5ibmdivmsn5grid0aeic8lrq28cq6ba7.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfAbk0FNIYLSPimwky_VxZopnyVt28-5Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "405464191304-5ibmdivmsn5grid0aeic8lrq28cq6ba7.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "405464191304-q9bbek5ga1vbptj7eh5cvjmum3vj5boe.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.triptandem"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

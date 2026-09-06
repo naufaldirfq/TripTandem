@@ -1,0 +1,6 @@
+// Production RevenueCat public key must be supplied by the signed release
+// pipeline (for example: xcodebuild REVENUECAT_PUBLIC_API_KEY=public_...).
+// Keeping the default empty makes an unconfigured archive free-only instead
+// of accidentally shipping the Test Store catalog.
+REVENUECAT_PUBLIC_API_KEY =
+CODE_SIGN_ENTITLEMENTS = TripTandem/TripTandem.entitlements

@@ -1,0 +1,73 @@
+# TripTandem repository ignore rules
+#
+# This is a public portfolio repository. Keep source code, product/design
+# documentation, tests, Firebase rules/configuration, and CI files visible;
+# exclude machine-local state, generated output, dependencies, and secrets.
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Local AI/design tooling and temporary workspace state
+.claude/
+.superdesign/
+
+# IDE/editor metadata
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# Android/Gradle/Kotlin generated state
+**/.gradle/
+**/.kotlin/
+**/build/
+**/local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# iOS/Xcode local state and generated dependencies
+**/xcuserdata/
+**/*.xcuserstate
+**/DerivedData/
+**/.build/
+Pods/
+
+# JavaScript/TypeScript dependencies and generated output
+**/node_modules/
+functions/lib/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Firebase/emulator and local tool logs
+.firebase/
+firepit-log.txt
+firebase-debug.log
+firestore-debug.log
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+*.secret.local
+
+# Signing keys, certificates, and provisioning material
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+AuthKey_*.p8
+
+# Archives and crash dumps
+*.apk
+*.aab
+*.ipa
+*.dSYM.zip
+*.hprof

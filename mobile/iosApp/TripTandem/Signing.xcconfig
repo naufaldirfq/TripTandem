@@ -1,0 +1,4 @@
+// Legacy placeholder retained for older local Xcode references. The generated
+// project uses Signing.Debug.xcconfig and Signing.Release.xcconfig so a
+// Test Store key can never leak into a Release archive.
+CODE_SIGN_ENTITLEMENTS = TripTandem/TripTandem.entitlements

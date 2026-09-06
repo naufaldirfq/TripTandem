@@ -1,0 +1,40 @@
+{
+  "conditions": [],
+  "parameters": {
+    "ai_generation_enabled": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Phase 2 AI itinerary generation rollout. Keep disabled until validation, quota, and data-use review are complete.",
+      "valueType": "BOOLEAN"
+    },
+    "open_trip_publishing_enabled": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Safety gate for publishing a trip to the open community.",
+      "valueType": "BOOLEAN"
+    },
+    "discovery_enabled": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Safety gate for browsing open trips and compatibility matches.",
+      "valueType": "BOOLEAN"
+    },
+    "join_requests_enabled": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Safety gate for requesting membership in an open trip.",
+      "valueType": "BOOLEAN"
+    },
+    "push_enabled": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Push-notification rollout gate; enable only after notification consent and delivery tests.",
+      "valueType": "BOOLEAN"
+    }
+  }
+}

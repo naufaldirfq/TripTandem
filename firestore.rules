@@ -1,0 +1,684 @@
+rules_version = '2';
+
+// TripTandem Firestore data model (Phase 1)
+//
+// /users/{uid}
+//   uid, displayName, avatarUrl?, bio?, homeRegion?, primaryLanguage,
+//   ageConfirmed, pace?, budgetBand?, visibility, additionalLanguages?,
+//   interests?, termsVersion, privacyVersion, consentedAt, accountStatus,
+//   createdAt, updatedAt
+// /trips/{tripId}
+//   ownerId, title, destination, startDate, endDate, visibility, capacity,
+//   status, destinationTimezone, datesFlexible, currency?, budgetBand?, pace?,
+//   expectationNote?, interests?, coverColor?, activeMemberCount, revision,
+//   createdAt, updatedAt
+// /trips/{tripId}/members/{memberId}
+//   userId, displayName?, inviteId?, role, status, joinedAt?, createdAt, updatedAt
+// /trips/{tripId}/itinerary/{itemId}
+//   type, title, startTime, startTimeLabel?, dayDate?, durationMinutes, place?, note?,
+//   flexibleTime?, status, visibility, position, revision, lastEditedBy?, deletedAt?,
+//   undoExpiresAt?, deletedBy?, generatedBy?, generationJobId?, createdAt, updatedAt
+// /trips/{tripId}/invites/{inviteId}
+//   tokenHash, role, expiresAt, maxUses, uses, revokedAt?, createdBy,
+//   createdAt, updatedAt
+// /trips/{tripId}/joinRequests/{requestId}
+//   applicantId, message?, status, createdAt, updatedAt
+// /reports/{reportId}
+//   reporterId, subjectType, subjectId, category, detail?, status,
+//   createdAt, updatedAt
+//
+// User-controlled reads of open-trip discovery are intentionally disabled.
+// A future public-search projection must be introduced with its own schema and
+// trust/safety review; private trip documents must not become a directory.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAccountActive() {
+      // A missing profile is allowed only for the bootstrap create below. All
+      // community/trip mutations use hasActiveProfile(), which also enforces
+      // the age-confirmation gate.
+      return signedIn()
+        && (!exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          || (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'active'
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ageConfirmed == true));
+    }
+
+    function hasActiveProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountStatus == 'active'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ageConfirmed == true;
+    }
+
+    function validString(value, min, max) {
+      return value is string && value.size() >= min && value.size() <= max;
+    }
+
+    function validOptionalString(data, field, min, max) {
+      return !(field in data) || validString(data[field], min, max);
+    }
+
+    // Firestore Rules cannot express generic list element types. Keep the
+    // supported lists small and validate each possible slot explicitly so a
+    // mixed-type or unbounded string payload cannot bypass the schema.
+    function validStringList(value, maxItems, minItemLength, maxItemLength) {
+      return value is list
+        && value.size() <= maxItems
+        && (value.size() < 1 || validString(value[0], minItemLength, maxItemLength))
+        && (value.size() < 2 || validString(value[1], minItemLength, maxItemLength))
+        && (value.size() < 3 || validString(value[2], minItemLength, maxItemLength))
+        && (value.size() < 4 || validString(value[3], minItemLength, maxItemLength))
+        && (value.size() < 5 || validString(value[4], minItemLength, maxItemLength))
+        && (value.size() < 6 || validString(value[5], minItemLength, maxItemLength))
+        && (value.size() < 7 || validString(value[6], minItemLength, maxItemLength))
+        && (value.size() < 8 || validString(value[7], minItemLength, maxItemLength))
+        && (value.size() < 9 || validString(value[8], minItemLength, maxItemLength))
+        && (value.size() < 10 || validString(value[9], minItemLength, maxItemLength))
+        && (value.size() < 11 || validString(value[10], minItemLength, maxItemLength))
+        && (value.size() < 12 || validString(value[11], minItemLength, maxItemLength));
+    }
+
+    function validOptionalEnum(data, field, values) {
+      return !(field in data) || data[field] in values;
+    }
+
+    // Callable validation additionally checks calendar semantics and date
+    // ranges. Rules cannot construct a date value, but they can reject
+    // malformed representations before a client write reaches Firestore.
+    function validIsoDate(value) {
+      return value is string
+        && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function validClockLabel(value) {
+      return value is string
+        && value.matches('^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$');
+    }
+
+    function validFlexibleTimeLabel(value) {
+      return value is string
+        && value.matches('(?i)^(morning|late morning|afternoon|evening|night|anytime)$');
+    }
+
+    function isTimestamp(value) {
+      return value is timestamp;
+    }
+
+    function unchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function tripExists(tripId) {
+      return exists(/databases/$(database)/documents/trips/$(tripId));
+    }
+
+    function phaseOneTripVisibility(data) {
+      // Open-trip discovery is a later, safety-gated phase. Keeping this
+      // server-side check in addition to the Remote Config flag prevents a
+      // direct client write from publishing an open trip early.
+      return data.visibility in ['private', 'unlisted'];
+    }
+
+    function isActiveTrip(data) {
+      return data.status in ['draft', 'planning', 'confirmed'];
+    }
+
+    function tripDeletionLockExists(tripId) {
+      return exists(/databases/$(database)/documents/tripDeletionLocks/$(tripId));
+    }
+
+    function tripAllowsChildMutation(tripId) {
+      return tripExists(tripId) && !tripDeletionLockExists(tripId);
+    }
+
+    function tripIsWritable(tripId) {
+      return tripAllowsChildMutation(tripId)
+        && isActiveTrip(get(/databases/$(database)/documents/trips/$(tripId)).data);
+    }
+
+    function tripIsJoinable(tripId) {
+      return tripExists(tripId)
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.visibility in ['private', 'unlisted']
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.status in ['planning', 'confirmed'];
+    }
+
+    function isTripOwner(tripId) {
+      return signedIn()
+        && tripExists(tripId)
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid;
+    }
+
+    function isTripMember(tripId) {
+      return hasActiveProfile()
+        && tripExists(tripId)
+        && exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isTripEditor(tripId) {
+      return isTripOwner(tripId)
+        || (isTripMember(tripId)
+          && get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.role in ['owner', 'editor']);
+    }
+
+    function tripChangeAllowedForRole(tripId) {
+      return isTripOwner(tripId)
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'visibility', 'capacity', 'status', 'ownerId', 'activeMemberCount'
+        ]);
+    }
+
+    function activeMemberCountChangedBy(delta) {
+      return request.resource.data.activeMemberCount == resource.data.activeMemberCount + delta;
+    }
+
+    // A member join/leave may change only the membership aggregate and
+    // optimistic-concurrency revision on the trip. Without this allowlist, a
+    // caller could bundle an unrelated title, visibility, capacity, or owner
+    // edit into the same atomic write and satisfy the counter check.
+    function tripDetailsUnchangedForMembership() {
+      return unchanged([
+        'ownerId', 'title', 'destination', 'startDate', 'endDate',
+        'destinationTimezone', 'datesFlexible', 'visibility', 'capacity',
+        'status', 'currency', 'budgetBand', 'pace', 'expectationNote',
+        'interests', 'coverColor', 'createdAt'
+      ]);
+    }
+
+    // Membership counters are changed in the same atomic operation as the
+    // member document. Invite acceptance and member leave can be authorized
+    // from Rules because those paths are the caller's own member document.
+    // Owner removals use the authenticated removeTripMember callable: Rules
+    // cannot safely bind a parent counter update to an arbitrary wildcard
+    // member path, so no direct owner-only counter mutation is allowed.
+
+    function invitedMemberCountIncrease(tripId) {
+      return signedIn()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && activeMemberCountChangedBy(1)
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount
+          <= getAfter(/databases/$(database)/documents/trips/$(tripId)).data.capacity
+        && request.resource.data.revision == resource.data.revision + 1
+        && tripDetailsUnchangedForMembership()
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.userId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'active'
+        // A counter increase must accompany this caller's membership create
+        // or reactivation. Without the transition check, an owner could use
+        // their already-active owner document to forge the parent count.
+        && (!exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
+          || (get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'removed'
+            && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'active'));
+    }
+
+    function memberLeaveCountDecrease(tripId) {
+      return isTripMember(tripId)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && activeMemberCountChangedBy(-1)
+        && request.resource.data.revision == resource.data.revision + 1
+        && tripDetailsUnchangedForMembership()
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'removed';
+    }
+
+    function tripMemberCountChangedBy(tripId, delta) {
+      return getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount
+        == get(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount + delta;
+    }
+
+    function tripMemberCountWithinCapacity(tripId) {
+      return getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount
+        <= getAfter(/databases/$(database)/documents/trips/$(tripId)).data.capacity;
+    }
+
+    function validOwnershipTransfer(tripId) {
+      return isTripOwner(tripId)
+        && request.resource.data.ownerId != resource.data.ownerId
+        && request.resource.data.ownerId != request.auth.uid
+        && get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.resource.data.ownerId)).data.status == 'active'
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.resource.data.ownerId)).data.role == 'owner'
+        && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.role == 'editor'
+        && request.resource.data.activeMemberCount == resource.data.activeMemberCount
+        && request.resource.data.revision == resource.data.revision + 1
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'title', 'destination', 'startDate', 'endDate', 'destinationTimezone',
+          'datesFlexible', 'visibility', 'capacity', 'status', 'currency',
+          'budgetBand', 'pace', 'expectationNote', 'interests', 'coverColor'
+        ]);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'homeRegion', 'primaryLanguage', 'ageConfirmed', 'visibility',
+          'termsVersion', 'privacyVersion', 'consentedAt', 'accountStatus',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'avatarUrl', 'bio', 'homeRegion', 'pace',
+          'budgetBand', 'primaryLanguage', 'ageConfirmed', 'visibility',
+          'additionalLanguages', 'interests', 'termsVersion', 'privacyVersion',
+          'consentedAt', 'accountStatus', 'createdAt', 'updatedAt'
+        ])
+        && validString(data.uid, 1, 128)
+        && validString(data.displayName, 2, 40)
+        && validString(data.primaryLanguage, 2, 80)
+        && data.ageConfirmed == true
+        && validOptionalString(data, 'avatarUrl', 1, 2048)
+        && validOptionalString(data, 'bio', 0, 240)
+        && validString(data.homeRegion, 1, 80)
+        && validOptionalEnum(data, 'pace', ['relaxed', 'balanced', 'packed', 'slow', 'fast'])
+        && validOptionalEnum(data, 'budgetBand', ['budget', 'moderate', 'comfort', 'premium', 'mid', 'flexible'])
+        && validOptionalEnum(data, 'visibility', ['private', 'connections'])
+        && (!('additionalLanguages' in data) || validStringList(data.additionalLanguages, 5, 2, 80))
+        && (!('interests' in data) || validStringList(data.interests, 12, 1, 60))
+        && validString(data.termsVersion, 1, 40)
+        && validString(data.privacyVersion, 1, 40)
+        && isTimestamp(data.consentedAt)
+        && data.accountStatus in ['active', 'suspended', 'deleted']
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidTrip(data) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'destination', 'startDate', 'endDate',
+          'destinationTimezone', 'datesFlexible', 'visibility', 'capacity',
+          'status', 'activeMemberCount', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'title', 'destination', 'startDate', 'endDate',
+          'destinationTimezone', 'datesFlexible', 'visibility', 'capacity',
+          'status', 'currency', 'budgetBand', 'pace', 'expectationNote',
+          'interests', 'coverColor', 'activeMemberCount', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && validString(data.ownerId, 1, 128)
+        && validString(data.title, 2, 120)
+        && validString(data.destination, 1, 160)
+        && validIsoDate(data.startDate)
+        && validIsoDate(data.endDate)
+        && data.startDate <= data.endDate
+        && validString(data.destinationTimezone, 1, 80)
+        && data.datesFlexible is bool
+        && data.visibility in ['private', 'unlisted', 'open']
+        && phaseOneTripVisibility(data)
+        && data.capacity is int
+        && data.capacity >= 2
+        && data.capacity <= 12
+        && data.status in ['draft', 'planning', 'confirmed', 'completed', 'cancelled', 'archived']
+        && data.activeMemberCount is int
+        && data.activeMemberCount >= 1
+        // Capacity may be lowered below the current membership count. The
+        // trip is then marked full and no new membership can be accepted; no
+        // existing member is evicted by an organizer edit.
+        && data.revision is int
+        && data.revision >= 0
+        && validOptionalString(data, 'currency', 3, 3)
+        && (!('currency' in data) || data.currency.matches('^[A-Z]{3}$'))
+        && validOptionalString(data, 'expectationNote', 0, 500)
+        && (!('interests' in data) || validStringList(data.interests, 12, 1, 60))
+        && validOptionalString(data, 'coverColor', 4, 16)
+        && (!('coverColor' in data) || data.coverColor.matches('^#[0-9A-Fa-f]{6}$'))
+        && validOptionalEnum(data, 'budgetBand', ['budget', 'moderate', 'comfort', 'premium', 'mid', 'flexible'])
+        && validOptionalEnum(data, 'pace', ['relaxed', 'balanced', 'packed', 'slow', 'fast'])
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidMember(data, memberId) {
+      return data.keys().hasAll(['userId', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'displayName', 'inviteId', 'role', 'status', 'joinedAt', 'createdAt', 'updatedAt'])
+        && validString(data.userId, 1, 128)
+        && data.userId == memberId
+        && validOptionalString(data, 'displayName', 1, 80)
+        && validOptionalString(data, 'inviteId', 1, 160)
+        && data.role in ['owner', 'editor', 'viewer']
+        && data.status in ['invited', 'active', 'removed']
+        && (!('joinedAt' in data) || isTimestamp(data.joinedAt))
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidItineraryItem(data) {
+      return data.keys().hasAll([
+          'type', 'title', 'startTime', 'durationMinutes', 'status', 'visibility',
+          'position', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'type', 'title', 'startTime', 'startTimeLabel', 'durationMinutes',
+          'place', 'note', 'dayDate', 'flexibleTime', 'status', 'visibility', 'position', 'revision',
+          'lastEditedBy', 'deletedAt', 'undoExpiresAt', 'deletedBy', 'generatedBy', 'generationJobId',
+          'createdAt', 'updatedAt'
+        ])
+        && data.type in ['activity', 'transport', 'meal', 'lodging', 'free']
+        && validString(data.title, 1, 160)
+        && isTimestamp(data.startTime)
+        && validOptionalString(data, 'startTimeLabel', 1, 32)
+        && (!('startTimeLabel' in data)
+          || (('flexibleTime' in data && data.flexibleTime == true)
+            ? validFlexibleTimeLabel(data.startTimeLabel)
+            : validClockLabel(data.startTimeLabel)))
+        && (!('dayDate' in data) || validIsoDate(data.dayDate))
+        && (!('flexibleTime' in data) || data.flexibleTime is bool)
+        && data.durationMinutes is int
+        && data.durationMinutes >= 0
+        && data.durationMinutes <= 1440
+        && data.status in ['idea', 'planned', 'booked', 'completed', 'cancelled']
+        && validOptionalString(data, 'place', 1, 200)
+        && validOptionalString(data, 'note', 0, 1000)
+        && data.visibility in ['trip', 'members']
+        && data.position is int
+        && data.position >= 0
+        && data.position <= 500
+        && data.revision is int
+        && data.revision >= 0
+        && validOptionalString(data, 'lastEditedBy', 1, 128)
+        // AI attribution is immutable metadata written by the server-side
+        // generation Apply transaction. Manual items omit both fields.
+        && validOptionalString(data, 'generatedBy', 1, 40)
+        && (!('generatedBy' in data) || data.generatedBy == 'triptandem_ai')
+        && (!('generationJobId' in data)
+          || (('generatedBy' in data) && data.generatedBy == 'triptandem_ai'
+            && validString(data.generationJobId, 1, 128)))
+        && (!('deletedAt' in data) || isTimestamp(data.deletedAt))
+        && (!('undoExpiresAt' in data) || isTimestamp(data.undoExpiresAt))
+        && validOptionalString(data, 'deletedBy', 1, 128)
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidJoinRequest(data) {
+      return data.keys().hasAll(['applicantId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['applicantId', 'message', 'status', 'createdAt', 'updatedAt'])
+        && validString(data.applicantId, 1, 128)
+        && validOptionalString(data, 'message', 0, 500)
+        && data.status in ['pending', 'approved', 'declined', 'withdrawn']
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll([
+          'reporterId', 'subjectType', 'subjectId', 'category', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'reporterId', 'subjectType', 'subjectId', 'category', 'detail',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && validString(data.reporterId, 1, 128)
+        && data.subjectType in ['trip', 'user', 'itinerary', 'joinRequest']
+        && validString(data.subjectId, 1, 160)
+        && data.category in ['spam', 'harassment', 'unsafe', 'scam', 'other']
+        && validOptionalString(data, 'detail', 0, 1000)
+        && data.status in ['open', 'triaged', 'resolved']
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt);
+    }
+
+    function isValidInvite(data) {
+      return data.keys().hasAll([
+          'tokenHash', 'role', 'expiresAt', 'maxUses', 'uses', 'createdBy',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'tokenHash', 'role', 'expiresAt', 'maxUses', 'uses', 'revokedAt',
+          'createdBy', 'tripTitle', 'previewDestination', 'previewStartDate',
+          'previewEndDate', 'inviterDisplayName', 'createdAt', 'updatedAt'
+        ])
+        && validString(data.tokenHash, 64, 64)
+        && data.role in ['editor', 'viewer']
+        && isTimestamp(data.expiresAt)
+        && data.maxUses is int && data.maxUses >= 1 && data.maxUses <= 20
+        && data.uses is int && data.uses >= 0 && data.uses <= data.maxUses
+        && validString(data.createdBy, 1, 128)
+        && validOptionalString(data, 'tripTitle', 1, 120)
+        && validOptionalString(data, 'previewDestination', 1, 160)
+        && (!('previewStartDate' in data) || validIsoDate(data.previewStartDate))
+        && (!('previewEndDate' in data) || validIsoDate(data.previewEndDate))
+        && (!('previewStartDate' in data) || !('previewEndDate' in data)
+          || data.previewStartDate <= data.previewEndDate)
+        && validOptionalString(data, 'inviterDisplayName', 1, 80)
+        && isTimestamp(data.createdAt)
+        && isTimestamp(data.updatedAt)
+        && (!('revokedAt' in data) || data.revokedAt == null || isTimestamp(data.revokedAt));
+    }
+
+    // Profiles are private to their owner. Public profile summaries should be
+    // introduced as a separate, deliberately limited document later. Profile
+    // deletion is a server-owned account operation so cleanup and active-trip
+    // ownership checks cannot be bypassed with a direct client write.
+    match /users/{userId} {
+      allow get, list: if isUser(userId);
+      allow create: if isUser(userId)
+        && isAccountActive()
+        && request.resource.data.uid == request.auth.uid
+        && isValidUser(request.resource.data);
+      allow update: if isUser(userId)
+        && isAccountActive()
+        && isValidUser(request.resource.data)
+        && unchanged(['uid', 'createdAt', 'accountStatus', 'consentedAt', 'termsVersion', 'privacyVersion', 'ageConfirmed']);
+      allow delete: if false;
+    }
+
+    // Private and unlisted trips are readable only by current members. Open
+    // discovery remains disabled until a sanitized search projection exists.
+    match /trips/{tripId} {
+      allow create: if signedIn()
+        && hasActiveProfile()
+        && request.resource.data.ownerId == request.auth.uid
+        && phaseOneTripVisibility(request.resource.data)
+        // Active-trip creation is a trusted callable transaction. Leaving
+        // this path available to clients would let a free organizer bypass
+        // the one-active-trip Pro gate by writing directly to Firestore.
+        && !isActiveTrip(request.resource.data)
+        // The callable is also the only path that may create a Pro-sized
+        // trip. A direct client write is always limited to the free cap.
+        && request.resource.data.capacity <= 6
+        // A newly created trip starts with its owner as the only active
+        // member. Keep the initial counter within capacity; an existing trip
+        // may later lower capacity below its unchanged member count, which
+        // simply makes the trip full without evicting anyone.
+        && request.resource.data.activeMemberCount <= request.resource.data.capacity
+        && isValidTrip(request.resource.data);
+      // Direct reads resolve the owner/member relationship from the target
+      // trip. Collection queries cannot evaluate isTripOwner(tripId) for an
+      // unknown document ID, so the owner list query is authorized from its
+      // ownerId equality constraint instead.
+      allow get: if isTripOwner(tripId) || isTripMember(tripId);
+      allow list: if hasActiveProfile() && resource.data.ownerId == request.auth.uid;
+      allow update: if hasActiveProfile()
+        && isValidTrip(request.resource.data)
+        && unchanged(['createdAt'])
+        && !tripDeletionLockExists(tripId)
+        // Capacity expansion and reactivation are checked by the trusted
+        // updateTrip callable, which can evaluate verified entitlement and
+        // the owner's active-trip count. Direct client updates cannot bypass
+        // either Pro gate.
+        && (request.resource.data.capacity <= 6
+          || request.resource.data.capacity == resource.data.capacity)
+        && !(isActiveTrip(request.resource.data) && !isActiveTrip(resource.data))
+        && ((isTripEditor(tripId)
+          && (validOwnershipTransfer(tripId)
+            || (unchanged(['ownerId', 'activeMemberCount'])
+              && tripChangeAllowedForRole(tripId)
+              && request.resource.data.revision == resource.data.revision + 1)))
+          || invitedMemberCountIncrease(tripId)
+          || memberLeaveCountDecrease(tripId));
+      // Parent deletes do not cascade into members, itinerary, invites, or
+      // joinRequests. The organizer must use the deleteTrip callable, which
+      // drains the complete graph before removing the root.
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow get, list: if isTripOwner(tripId) || isTripMember(tripId);
+        allow create: if tripAllowsChildMutation(tripId) && ((hasActiveProfile()
+          && memberId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid
+          && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount == 1
+          && request.resource.data.role == 'owner'
+          && request.resource.data.status == 'active'
+          && isValidMember(request.resource.data, memberId))
+          || (hasActiveProfile()
+          && isTripOwner(tripId)
+          && memberId == request.auth.uid
+          && request.resource.data.role == 'owner'
+          && request.resource.data.status == 'active'
+          && isValidMember(request.resource.data, memberId)
+          && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount == 1)
+          || (signedIn()
+            && hasActiveProfile()
+            && request.auth.uid == memberId
+            && isValidMember(request.resource.data, memberId)
+            && tripIsJoinable(tripId)
+            && request.resource.data.status == 'active'
+            && 'inviteId' in request.resource.data
+            && exists(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId))
+             && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
+             && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses < get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.maxUses
+             && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount == get(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount + 1
+             && tripMemberCountWithinCapacity(tripId)
+             && getAfter(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses == get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses + 1));
+        allow update: if tripAllowsChildMutation(tripId) && hasActiveProfile()
+          && isValidMember(request.resource.data, memberId)
+          && unchanged(['userId', 'createdAt', 'joinedAt'])
+          && ((isTripOwner(tripId)
+              && resource.data.role in ['editor', 'viewer']
+              && request.resource.data.role in ['editor', 'viewer']
+              && unchanged(['status', 'inviteId', 'displayName']))
+            || (request.auth.uid == memberId
+              && resource.data.role != 'owner'
+              && resource.data.status == 'active'
+              && request.resource.data.status == 'removed'
+              && tripMemberCountChangedBy(tripId, -1))
+            || (request.auth.uid == memberId
+              && resource.data.status == 'removed'
+              && request.resource.data.status == 'active'
+              && tripIsJoinable(tripId)
+              && 'inviteId' in request.resource.data
+              && exists(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId))
+               && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
+               && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses < get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.maxUses
+               && tripMemberCountChangedBy(tripId, 1)
+               && tripMemberCountWithinCapacity(tripId))
+            || (isTripOwner(tripId)
+              && request.resource.data.role == 'editor'
+              && resource.data.role == 'owner'
+              && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.ownerId != request.auth.uid)
+            || (isTripOwner(tripId)
+              && request.resource.data.role == 'owner'
+              && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == memberId));
+        // Membership removal must update activeMemberCount and the trip
+        // revision atomically. Owners use the trusted removeTripMember
+        // callable for this operation; a direct delete would leave a stale
+        // aggregate and is therefore denied.
+        allow delete: if false;
+      }
+
+      match /itinerary/{itemId} {
+        allow get, list: if isTripMember(tripId) || isTripOwner(tripId);
+        allow create: if tripIsWritable(tripId) && hasActiveProfile() && isTripEditor(tripId)
+          // AI attribution is reserved for the trusted Functions Apply
+          // transaction. Direct client-created itinerary items cannot spoof
+          // generated metadata.
+          && !request.resource.data.keys().hasAny(['generatedBy', 'generationJobId'])
+          && (!('dayDate' in request.resource.data)
+            || (request.resource.data.dayDate >= get(/databases/$(database)/documents/trips/$(tripId)).data.startDate
+              && request.resource.data.dayDate <= get(/databases/$(database)/documents/trips/$(tripId)).data.endDate))
+          && isValidItineraryItem(request.resource.data);
+        allow update: if tripIsWritable(tripId) && hasActiveProfile() && isTripEditor(tripId)
+          && isValidItineraryItem(request.resource.data)
+          && (!('dayDate' in request.resource.data)
+            || (request.resource.data.dayDate >= get(/databases/$(database)/documents/trips/$(tripId)).data.startDate
+              && request.resource.data.dayDate <= get(/databases/$(database)/documents/trips/$(tripId)).data.endDate))
+          && unchanged(['createdAt'])
+          && unchanged(['generatedBy', 'generationJobId'])
+          && request.resource.data.revision == resource.data.revision + 1;
+        allow delete: if false;
+      }
+
+      match /joinRequests/{requestId} {
+        allow create: if tripIsWritable(tripId) && hasActiveProfile()
+          && request.resource.data.applicantId == request.auth.uid
+          && isValidJoinRequest(request.resource.data)
+          && request.resource.data.status == 'pending';
+        allow get, list: if signedIn()
+          && (resource.data.applicantId == request.auth.uid || isTripOwner(tripId));
+        allow update: if (tripIsWritable(tripId) && hasActiveProfile() && isTripOwner(tripId)
+          && isValidJoinRequest(request.resource.data)
+          && unchanged(['applicantId', 'createdAt']))
+          || (tripIsWritable(tripId) && signedIn()
+            && resource.data.applicantId == request.auth.uid
+            && isValidJoinRequest(request.resource.data)
+            && unchanged(['applicantId', 'createdAt'])
+            && request.resource.data.status == 'withdrawn');
+        allow delete: if tripAllowsChildMutation(tripId)
+          && (isTripOwner(tripId)
+            || (signedIn() && resource.data.applicantId == request.auth.uid));
+      }
+
+      match /invites/{inviteId} {
+        // Invite IDs are SHA-256 hashes of high-entropy raw tokens. Requiring
+        // the stored hash to match the path makes invite resolution a direct
+        // read and prevents collection enumeration.
+        allow get: if signedIn() && resource.data.tokenHash == inviteId;
+        allow create: if tripAllowsChildMutation(tripId) && hasActiveProfile() && isTripOwner(tripId) && tripIsJoinable(tripId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.tokenHash == inviteId
+          && isValidInvite(request.resource.data);
+        allow update: if tripAllowsChildMutation(tripId) && hasActiveProfile()
+          && isValidInvite(request.resource.data)
+          && request.resource.data.tokenHash == inviteId
+          && unchanged(['tokenHash', 'role', 'expiresAt', 'maxUses', 'createdBy',
+            'tripTitle', 'previewDestination', 'previewStartDate',
+            'previewEndDate', 'inviterDisplayName', 'createdAt'])
+          && ((isTripOwner(tripId)
+            && (request.resource.data.uses == resource.data.uses
+              || request.resource.data.uses == resource.data.uses + 1))
+            || (request.auth.uid == getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.userId
+              && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'active'
+              && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.inviteId == inviteId
+              && request.resource.data.uses == resource.data.uses + 1
+              && tripMemberCountChangedBy(tripId, 1)));
+        allow delete: if tripAllowsChildMutation(tripId) && isTripOwner(tripId);
+      }
+    }
+
+    // Collection-group reads used by the Trips screen are restricted to the
+    // caller's own active membership records. Firestore evaluates a
+    // collection-group query against every possible matching path, so the
+    // wildcard document ID cannot be constrained to the caller here. The
+    // validated userId field is the canonical membership identity instead;
+    // member create/update rules require it to match the path ID. The
+    // subsequent trip read is still authorized by the nested private-trip
+    // rule above.
+    match /{path=**}/members/{memberId} {
+      allow get: if hasActiveProfile()
+        && memberId == request.auth.uid
+        && resource.data.userId == request.auth.uid
+        && resource.data.status == 'active';
+      allow list: if hasActiveProfile()
+        && resource.data.userId == request.auth.uid
+        && resource.data.status == 'active';
+    }
+
+    // Reports are write-only for end users. A trusted moderation service will
+    // read and update them once moderation is implemented.
+    match /reports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.status == 'open'
+        && isValidReport(request.resource.data);
+      allow read, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

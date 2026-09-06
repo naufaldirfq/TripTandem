@@ -1,0 +1,4 @@
+// Debug-only RevenueCat Test Store access for local verification. Never use
+// this value in an App Store archive.
+REVENUECAT_PUBLIC_API_KEY = test_DmhECcKFidQzMMdcpVdNqdRzYTz
+CODE_SIGN_ENTITLEMENTS = TripTandem/TripTandem.entitlements
