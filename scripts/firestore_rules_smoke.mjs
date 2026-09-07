@@ -650,14 +650,16 @@ try {
     createdAt: now(),
     updatedAt: now(),
   };
-  expectStatus('applicant creates join request', await firestore('PATCH', joinRequestPath, b.token, joinRequest), 200);
-  expectStatus('owner reads join request', await firestore('GET', joinRequestPath, a.token), 200);
-  expectStatus('owner approves join request', await firestore('PATCH', joinRequestPath, a.token, {
+  expectStatus('applicant cannot create join request directly', await firestore('PATCH', joinRequestPath, b.token, joinRequest), 403);
+  expectStatus('owner cannot read join request directly', await firestore('GET', joinRequestPath, a.token), 403);
+  expectStatus('owner cannot approve join request directly', await firestore('PATCH', joinRequestPath, a.token, {
     ...joinRequest,
     status: 'approved',
     updatedAt: now(),
-  }), 200);
+  }), 403);
   if (adminDb) {
+    // Seed a trusted lifecycle record to preserve trip-graph deletion coverage.
+    await adminDb.doc(joinRequestPath).set({ ...joinRequest, createdAt: new Date(), updatedAt: new Date() });
     // The owner-trip aggregate may be repaired incorrectly after an import or
     // manual admin edit. A counter of one must still be rejected when two
     // active member documents exist, otherwise account deletion could strand

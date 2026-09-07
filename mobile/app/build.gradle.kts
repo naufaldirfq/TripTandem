@@ -88,6 +88,8 @@ dependencies {
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.perf)
   implementation(libs.firebase.functions)
+  implementation("com.google.firebase:firebase-messaging")
+  implementation("com.google.firebase:firebase-appcheck-playintegrity")
   implementation(libs.purchases.kmp.core)
   // Modern Google Sign-In uses AndroidX Credential Manager and a Google ID token.
   implementation(libs.androidx.credentials)

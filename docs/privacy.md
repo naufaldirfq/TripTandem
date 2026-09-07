@@ -14,6 +14,12 @@ production analytics or public-trip discovery is enabled.
   destination, dates, itinerary items, roles, invitations, and join requests.
 - Safety reports and account-deletion audit records needed to operate trust and
   safety workflows.
+- Community activity and notification records are retained for 90 days. Closed
+  join requests are retained for 30 days after their terminal state. Safety
+  reports are retained for 180 days and their restricted moderation audit
+  records for 365 days, unless a documented legal hold requires longer
+  preservation. Delivery tokens and installation records expire after 30 days
+  without refresh and are removed on sign-out or account deletion.
 
 When a user starts AI itinerary generation, the normalized planning parameters
 and sanitized preview are kept in a temporary generation job for up to seven
@@ -80,8 +86,9 @@ travelers’ money in this release.
 Users should be able to edit profile data, leave a trip, revoke an invitation,
 block/report another user, and request account deletion. Account deletion must
 remove or anonymize personal data while preserving only narrowly necessary
-moderation/audit records. Retention periods and support contact details are
-still product decisions to record before store submission.
+moderation/audit records. The Phase 3 retention periods are documented above;
+the product owner must still replace this draft with the final policy and
+publish a staffed support contact before enabling community discovery.
 
 ## Consent and children
 

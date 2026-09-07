@@ -38,6 +38,7 @@ kotlin {
             implementation(compose.components.resources)
             implementation(libs.purchases.kmp.core)
             implementation(libs.kotlinx.coroutines.core)
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
 
         named { it.lowercase().startsWith("ios") }.configureEach {

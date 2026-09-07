@@ -59,6 +59,7 @@ fun MainViewControllerWithAnalyticsAndRepositoriesAndPendingInviteAndRevenueCat(
     onOpenExternalUrl: ((String) -> Unit)? = null,
     onManageSubscription: (() -> Unit)? = null,
     connectivity: ConnectivityMonitor? = null,
+    onShareExport: ((String) -> Unit)? = null,
 ) = ComposeUIViewController {
     TripTandemApp(
         analytics = analytics ?: NoOpTripTandemAnalytics,
@@ -70,5 +71,29 @@ fun MainViewControllerWithAnalyticsAndRepositoriesAndPendingInviteAndRevenueCat(
         onOpenExternalUrl = onOpenExternalUrl,
         onManageSubscription = onManageSubscription,
         connectivity = connectivity ?: AlwaysOnlineConnectivityMonitor,
+        onShareExport = onShareExport,
     )
 }
+
+fun MainViewControllerWithAnalyticsAndRepositoriesAndPendingInviteAndRevenueCat(
+    analytics: TripTandemAnalytics?,
+    repositories: TripTandemRepositories?,
+    pendingInvite: PendingInvite?,
+    revenueCat: RevenueCatCoordinator?,
+    featureFlags: TripTandemFeatureFlags = TripTandemFeatureFlags(),
+    onSignOut: (() -> Unit)? = null,
+    onOpenExternalUrl: ((String) -> Unit)? = null,
+    onManageSubscription: (() -> Unit)? = null,
+    connectivity: ConnectivityMonitor? = null,
+) = MainViewControllerWithAnalyticsAndRepositoriesAndPendingInviteAndRevenueCat(
+    analytics = analytics,
+    repositories = repositories,
+    pendingInvite = pendingInvite,
+    revenueCat = revenueCat,
+    featureFlags = featureFlags,
+    onSignOut = onSignOut,
+    onOpenExternalUrl = onOpenExternalUrl,
+    onManageSubscription = onManageSubscription,
+    connectivity = connectivity,
+    onShareExport = null,
+)

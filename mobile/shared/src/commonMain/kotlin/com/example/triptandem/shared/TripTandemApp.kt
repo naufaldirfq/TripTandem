@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -50,6 +51,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -103,6 +108,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.jetbrains.compose.resources.Font
 import triptandem.shared.generated.resources.Res
 import triptandem.shared.generated.resources.cabinet_grotesk_bold
@@ -200,6 +210,7 @@ fun TripTandemApp(
     onOpenExternalUrl: ((String) -> Unit)? = null,
     onManageSubscription: (() -> Unit)? = null,
     connectivity: ConnectivityMonitor = AlwaysOnlineConnectivityMonitor,
+    onShareExport: ((String) -> Unit)? = null,
 ) {
     val resolvedTypography = typography ?: tripTandemTypography()
     val data = remember(repositories) { repositories ?: TripTandemRepositories.local() }
@@ -438,6 +449,7 @@ fun TripTandemApp(
                         analytics.logScreen(route.screenName)
                     },
                     onShareInvite = onShareInvite,
+                    onShareExport = onShareExport,
                     onTripUpdated = { updated -> selectedTrip = updated },
                     onTripDeleted = {
                         selectedTrip = null
@@ -1202,6 +1214,13 @@ private fun ProfileSetupScreen(
             }
             if (settingsMode) {
                 item {
+                    OfflineStorageCard(
+                        repositories = repositories,
+                        analytics = analytics,
+                        userId = initialProfile?.uid ?: session?.uid,
+                    )
+                }
+                item {
                     SettingsSafetyNote()
                 }
                 item {
@@ -1407,6 +1426,8 @@ private fun HomeScreen(
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<TripTandemError?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val activityNavigation by CommunityNavigation.requests.collectAsState()
+    LaunchedEffect(activityNavigation) { if (activityNavigation > 0) selectedTab = 2 }
     val scope = rememberCoroutineScope()
 
     fun loadTrips() {
@@ -1427,6 +1448,20 @@ private fun HomeScreen(
     val activeTripCount = profile?.uid?.let { activeOwnedTripCount(trips, it) } ?: 0
     val canStartAnotherTrip = proStatus?.isActive == true || activeTripCount < 1
     val createTripAction = if (canStartAnotherTrip) onCreateTrip else onUpgrade
+    var actionableActivityCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(repositories.community, selectedTab) {
+        when (val result = repositories.community.execute("activity", emptyMap())) {
+            is DataResult.Success -> {
+                actionableActivityCount = runCatching {
+                    Json.parseToJsonElement(result.value).jsonObject["items"]?.jsonArray?.count { row ->
+                        row.jsonObject["read"]?.let { (it as? JsonPrimitive)?.contentOrNull } != "true" &&
+                            row.jsonObject["actionable"]?.let { (it as? JsonPrimitive)?.contentOrNull } == "true"
+                    } ?: 0
+                }.getOrDefault(0)
+            }
+            is DataResult.Failure -> Unit
+        }
+    }
 
     Scaffold(
         containerColor = Cream,
@@ -1439,7 +1474,16 @@ private fun HomeScreen(
                             selectedTab = index
 
                         },
-                        icon = { TripIcon(tabIcon(index), contentDescription = label) },
+                        icon = {
+                            Box {
+                                TripIcon(tabIcon(index), contentDescription = label)
+                                if (index == 2 && actionableActivityCount > 0) {
+                                    Box(Modifier.size(16.dp).background(Danger, CircleShape), contentAlignment = Alignment.Center) {
+                                        Text(if (actionableActivityCount > 9) "9+" else actionableActivityCount.toString(), color = Color.White, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        },
                         label = { Text(label) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = Coral,
@@ -1455,6 +1499,17 @@ private fun HomeScreen(
     ) { innerPadding ->
         if (selectedTab == 3) {
             Box(Modifier.padding(bottom = innerPadding.calculateBottomPadding())) { profileContent() }
+         } else if (selectedTab == 1 || selectedTab == 2) {
+            Box(Modifier.padding(innerPadding)) {
+                CommunityScreen(repositories.community, if (selectedTab == 1) "discover" else "activity", featureFlags, analytics,
+                    onCreateTrip = createTripAction,
+                    onOpenTrip = { id -> scope.launch {
+                        when (val result = repositories.trips.getTrip(id)) {
+                            is DataResult.Success -> onTripSelected(result.value)
+                            is DataResult.Failure -> error = result.error
+                        }
+                    } })
+            }
         } else LazyColumn(
             Modifier.fillMaxSize().padding(innerPadding),
             contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp),
@@ -1467,7 +1522,7 @@ private fun HomeScreen(
                         Text("TripTandem", color = Ink, style = MaterialTheme.typography.titleLarge)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = {}) {
+                        IconButton(onClick = { selectedTab = 2 }) {
                             TripIcon(
                                 TripIconKind.Bell,
                                 contentDescription = "Notifications",
@@ -1808,6 +1863,7 @@ private fun ItineraryScreen(
     onBack: () -> Unit,
     onInviteMembers: () -> Unit,
     onShareInvite: ((String) -> Unit)? = null,
+    onShareExport: ((String) -> Unit)? = null,
     onTripUpdated: (TripRecord) -> Unit,
     onTripDeleted: () -> Unit,
 ) {
@@ -1817,7 +1873,11 @@ private fun ItineraryScreen(
     var error by remember { mutableStateOf<TripTandemError?>(null) }
     var selectedDay by rememberSaveable(trip.id) { mutableIntStateOf(0) }
     var tripTab by rememberSaveable(trip.id) { mutableIntStateOf(0) }
+    var showCommunity by remember { mutableStateOf(false) }
     var showAdd by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
+    var lastSyncTime by remember(currentTrip.id) { mutableStateOf<Long?>(null) }
     var editing by remember { mutableStateOf<ItineraryItem?>(null) }
     var showEditTrip by remember { mutableStateOf(false) }
     var showDeleteTrip by remember { mutableStateOf(false) }
@@ -1844,11 +1904,11 @@ private fun ItineraryScreen(
     // Completed, cancelled, and archived trips are read-only. Keeping this
     // gate in the shared UI mirrors the server-side policy and prevents an
     // editor from seeing mutation controls after a trip is closed.
-    val canEdit = currentMember?.let {
+    val canEdit = isOnline && (currentMember?.let {
         it.status == MembershipStatus.Active &&
             (it.role == TripMemberRole.Owner || it.role == TripMemberRole.Editor) &&
             currentTrip.status in setOf(TripStatus.Draft, TripStatus.Planning, TripStatus.Confirmed)
-    } == true
+    } == true)
     val timeConflicts = visibleItems.filter { item ->
         visibleItems.any { other -> other.id != item.id && overlaps(item, other) }
     }.map { it.id }.toSet()
@@ -2028,10 +2088,63 @@ private fun ItineraryScreen(
         error = null
         scope.launch {
             when (val result = repositories.itinerary.listItems(trip.id)) {
-                is DataResult.Success -> items = result.value.sortedBy { it.position }
+                is DataResult.Success -> {
+                    items = result.value.sortedBy { it.position }
+                    lastSyncTime = currentEpochMillis()
+                }
                 is DataResult.Failure -> error = result.error
             }
             loading = false
+        }
+    }
+
+    fun syncNow() {
+        if (refreshing) return
+        refreshing = true
+        scope.launch {
+            var refreshSuccess = false
+            var isOfflineError = false
+            when (val tripRes = repositories.trips.getTrip(currentTrip.id)) {
+                is DataResult.Success -> {
+                    currentTrip = tripRes.value
+                    onTripUpdated(tripRes.value)
+                    refreshSuccess = true
+                }
+                is DataResult.Failure -> {
+                    if (tripRes.error is TripTandemError.Offline) isOfflineError = true
+                }
+            }
+            when (val itemsRes = repositories.itinerary.listItems(currentTrip.id)) {
+                is DataResult.Success -> {
+                    items = itemsRes.value.sortedBy { it.position }
+                    refreshSuccess = true
+                }
+                is DataResult.Failure -> {
+                    if (itemsRes.error is TripTandemError.Offline) isOfflineError = true
+                }
+            }
+            when (val membersRes = repositories.members.listMembers(currentTrip.id)) {
+                is DataResult.Success -> {
+                    team = membersRes.value
+                    refreshSuccess = true
+                }
+                is DataResult.Failure -> {
+                    if (membersRes.error is TripTandemError.Offline) isOfflineError = true
+                }
+            }
+            if (refreshSuccess) {
+                lastSyncTime = currentEpochMillis()
+            }
+            val resultParam = when {
+                refreshSuccess && isOnline -> "success"
+                isOfflineError || !isOnline -> "offline"
+                else -> "error"
+            }
+            analytics.logEvent(
+                TripTandemAnalytics.Events.OFFLINE_REFRESH_COMPLETED,
+                mapOf("result" to resultParam),
+            )
+            refreshing = false
         }
     }
 
@@ -2091,7 +2204,16 @@ private fun ItineraryScreen(
         loadItems()
         team = (repositories.members.listMembers(trip.id) as? DataResult.Success)?.value.orEmpty()
         when (val result = repositories.members.getCurrentMember(currentTrip.id)) {
-            is DataResult.Success -> currentMember = result.value
+            is DataResult.Success -> {
+                currentMember = result.value
+                val uid = result.value?.userId.orEmpty()
+                if (uid.isNotBlank() && lastSyncTime == null) {
+                    val bundle = repositories.offlineCache.getCachedTripBundle(uid, currentTrip.id)
+                    if (bundle != null) {
+                        lastSyncTime = bundle.lastSyncEpochMillis
+                    }
+                }
+            }
             is DataResult.Failure -> Unit
         }
         val persistedJobId = activeGenerationJobId
@@ -2135,6 +2257,12 @@ private fun ItineraryScreen(
         }
     }
 
+    if (showCommunity) {
+        CommunityScreen(repositories.community, "publish", featureFlags, analytics, currentTrip.id,
+            onBack = { showCommunity = false })
+        return
+    }
+
     Scaffold(
         containerColor = Cream,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -2148,6 +2276,8 @@ private fun ItineraryScreen(
                             Box(Modifier.size(32.dp).background(if (member.role == TripMemberRole.Owner) CoralTint else SageTint, CircleShape), contentAlignment = Alignment.Center) { Text(initials(member.displayName), color = InkSoft, style = MaterialTheme.typography.labelSmall) }
                         }
                         IconButton(onClick = { tripTab = 2 }) { TripIcon(TripIconKind.Users, "View members", tint = Coral) }
+                        TextButton(onClick = { showExportDialog = true }) { Text("Export") }
+                        if (currentMember?.role == TripMemberRole.Owner) TextButton(onClick = { showCommunity = true }) { Text("Community") }
                         if (canEdit) TextButton(onClick = { showEditTrip = true }) { Text("Edit") }
                     }
                 }
@@ -2158,8 +2288,29 @@ private fun ItineraryScreen(
                 Text(currentTrip.title, style = MaterialTheme.typography.headlineSmall)
                 TripSectionTabs(tripTab) { tripTab = it }
             }
+            if (!isOnline) {
+                OfflineModeBanner(
+                    lastSyncTime = lastSyncTime,
+                    onSyncNow = ::syncNow,
+                    refreshing = refreshing,
+                )
+            }
             if (tripTab == 0) {
-                TripOverview(currentTrip, items, team, loading, error, ::loadItems, onMembers = { tripTab = 2 }, onItinerary = { tripTab = 1 })
+                TripOverview(
+                    trip = currentTrip,
+                    items = items,
+                    team = team,
+                    loading = loading,
+                    error = error,
+                    retry = ::loadItems,
+                    onMembers = { tripTab = 2 },
+                    onItinerary = { tripTab = 1 },
+                    lastSyncTime = lastSyncTime,
+                    onSyncNow = ::syncNow,
+                    refreshing = refreshing,
+                    onExport = { showExportDialog = true },
+                    isOnline = isOnline,
+                )
             } else if (tripTab == 2) {
                 Box(Modifier.weight(1f)) { MembersScreen(currentTrip, repositories, analytics, onBack = { tripTab = 1 }, onShareInvite = onShareInvite, embedded = true) }
             } else {
@@ -2307,6 +2458,23 @@ private fun ItineraryScreen(
                     }
                     Button(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Coral)) {
                         TripIcon(TripIconKind.Plus, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)); Text("Add to day ${selectedDay + 1}", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            } else if (!isOnline && currentTrip.status != TripStatus.Cancelled && currentTrip.status != TripStatus.Archived) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = CreamBorder.copy(alpha = 0.5f),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TripIcon(TripIconKind.Alert, contentDescription = null, tint = InkMuted, modifier = Modifier.size(18.dp))
+                            Text("Connection required to add or edit itinerary stops.", color = InkMuted, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
@@ -2514,6 +2682,16 @@ private fun ItineraryScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { pendingTripUpdate = null }) { Text("Keep current dates") } },
+        )
+    }
+    if (showExportDialog) {
+        ExportItineraryDialog(
+            trip = currentTrip,
+            items = items,
+            members = team,
+            onDismiss = { showExportDialog = false },
+            onShare = onShareExport,
+            analytics = analytics,
         )
     }
 }
@@ -3523,6 +3701,7 @@ private fun MembersScreen(
                         },
                         onTransfer = { transferTarget = member },
                     )
+                    if (member.userId != currentMember?.userId) MemberSafetyActions(repositories.community, member.userId)
                 }
                 item { Button(onClick = { showInvites = !showInvites }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = CoralHero)) { Text(if (showInvites) "Hide invitations" else "Invite more people", style = MaterialTheme.typography.titleMedium) } }
                 if (showInvites) {
@@ -4037,7 +4216,7 @@ private fun ItineraryVisibility.label(): String = when (this) {
     ItineraryVisibility.Members -> "Members only"
     ItineraryVisibility.TripSummary -> "Trip summary"
 }
-private fun initials(name: String): String = name.trim().split(" ").filter { it.isNotEmpty() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "T" }
+internal fun initials(name: String): String = name.trim().split(" ").filter { it.isNotEmpty() }.take(2).joinToString("") { it.first().uppercase() }.ifBlank { "T" }
 private fun capacityBucket(value: Int): String = when { value <= 4 -> "2_4"; value <= 8 -> "5_8"; else -> "9_12" }
 private fun priceBucket(amountMicros: Long?): String = when {
     amountMicros == null -> "unknown"
@@ -4094,7 +4273,7 @@ private fun parseClockMinutes(value: String?): Int? {
     return if (hour in 0..23 && minute in 0..59) hour * 60 + minute else null
 }
 
-private fun dayDateAt(trip: TripRecord, day: Int): String {
+internal fun dayDateAt(trip: TripRecord, day: Int): String {
     var date = parseDate(trip.startDate) ?: return trip.startDate
     repeat(day.coerceAtLeast(0)) {
         val monthLength = when (date.month) {
@@ -4111,23 +4290,23 @@ private fun dayDateAt(trip: TripRecord, day: Int): String {
 
 private fun dayLabel(trip: TripRecord, day: Int): String = dayDateAt(trip, day)
 
-private fun daysInclusive(start: String, end: String): Int {
+internal fun daysInclusive(start: String, end: String): Int {
     val a = parseDate(start) ?: return 1
     val b = parseDate(end) ?: return 1
     return (toOrdinal(b) - toOrdinal(a) + 1).coerceAtLeast(1)
 }
 
-private data class SimpleDate(val year: Int, val month: Int, val day: Int)
-private fun parseDate(value: String): SimpleDate? = value.split('-').takeIf { it.size == 3 }?.let {
+internal data class SimpleDate(val year: Int, val month: Int, val day: Int)
+internal fun parseDate(value: String): SimpleDate? = value.split('-').takeIf { it.size == 3 }?.let {
     runCatching { SimpleDate(it[0].toInt(), it[1].toInt(), it[2].toInt()) }.getOrNull()
 }
-private fun toOrdinal(date: SimpleDate): Int {
+internal fun toOrdinal(date: SimpleDate): Int {
     var y = date.year; val m = date.month; if (m <= 2) y--
     val era = y / 400; val yoe = y - era * 400; val mp = m + if (m > 2) -3 else 9; val doy = (153 * mp + 2) / 5 + date.day - 1; val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
     return era * 146097 + doe
 }
 
-private fun SimpleDate.toIsoString(): String = "${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}"
+internal fun SimpleDate.toIsoString(): String = "${year.toString().padStart(4, '0')}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}"
 
 private fun ItineraryItem.toUpdateInput(position: Int): UpdateItineraryItemInput = UpdateItineraryItemInput(
     type = type,
@@ -4472,11 +4651,11 @@ private fun TripFormDialog(
     }
 }
 
-private fun shortDate(value: String): String {
+internal fun shortDate(value: String): String {
     val date = parseDate(value) ?: return value
     return "${listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec").getOrElse(date.month - 1) { "" }} ${date.day}"
 }
-private fun weekday(value: String): String {
+internal fun weekday(value: String): String {
     val date = parseDate(value) ?: return "Day"
     val anchor = toOrdinal(SimpleDate(2026, 9, 6))
     return listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")[((toOrdinal(date) - anchor) % 7 + 7) % 7]
@@ -4492,7 +4671,21 @@ private fun TripSectionTabs(selected: Int, onSelect: (Int) -> Unit) {
     }
 }
 @Composable
-private fun TripOverview(trip: TripRecord, items: List<ItineraryItem>, team: List<TripMember>, loading: Boolean, error: TripTandemError?, retry: () -> Unit, onMembers: () -> Unit, onItinerary: () -> Unit) {
+private fun TripOverview(
+    trip: TripRecord,
+    items: List<ItineraryItem>,
+    team: List<TripMember>,
+    loading: Boolean,
+    error: TripTandemError?,
+    retry: () -> Unit,
+    onMembers: () -> Unit,
+    onItinerary: () -> Unit,
+    lastSyncTime: Long? = null,
+    onSyncNow: (() -> Unit)? = null,
+    refreshing: Boolean = false,
+    onExport: (() -> Unit)? = null,
+    isOnline: Boolean = true,
+) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item { DesignCard {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -4506,6 +4699,45 @@ private fun TripOverview(trip: TripRecord, items: List<ItineraryItem>, team: Lis
                 } }
             }
             if (!loading) Text("${items.mapNotNull { it.dayDate }.distinct().size} days planned · ${trip.destinationTimezone}", color = Sage, style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider(color = CreamBorder)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Synced: ${formatSyncAge(lastSyncTime)}",
+                    color = InkMuted,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (onSyncNow != null) {
+                        TextButton(
+                            onClick = onSyncNow,
+                            enabled = !refreshing,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            if (refreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Coral,
+                                )
+                            } else {
+                                Text("Sync now", color = Coral, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    if (onExport != null) {
+                        TextButton(
+                            onClick = onExport,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            Text("Export", color = Coral, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
         } }
         if (error != null) item { ErrorBanner(error, retry) }
         item { Text("UP NEXT", color = CoralHero, style = MaterialTheme.typography.labelLarge) }
@@ -4542,5 +4774,361 @@ private fun ItineraryEmptyState(day: Int, date: String, onAdd: () -> Unit, onGen
             if (onGenerate != null) Button(onClick = onGenerate, shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = CoralHero)) { Text("Generate with AI") }
         }
         Surface(color = SageTint, shape = RoundedCornerShape(18.dp)) { Text("Activities can be meals, sightseeing, transport, accommodation, or anything else you want to do together.", Modifier.padding(18.dp), color = Sage) }
+    }
+}
+
+@Composable
+private fun OfflineModeBanner(
+    lastSyncTime: Long?,
+    onSyncNow: () -> Unit,
+    refreshing: Boolean,
+) {
+    val isStale = lastSyncTime != null && !OfflineCachePolicy.isAuthorizedOffline(lastSyncTime)
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = if (isStale) DangerTint else CoralTint,
+        border = BorderStroke(1.dp, if (isStale) DangerBorder else CreamBorder),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TripIcon(
+                    TripIconKind.Alert,
+                    contentDescription = null,
+                    tint = if (isStale) Danger else Coral,
+                    modifier = Modifier.size(18.dp),
+                )
+                Column {
+                    if (isStale) {
+                        Text(
+                            "Offline authorization expired (7+ days)",
+                            color = Danger,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            "Reconnect to refresh your access and view updates.",
+                            color = Color(0xFF5C2416),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        Text(
+                            "Offline mode (read-only)",
+                            color = Coral,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Text(
+                            "Synced ${formatSyncAge(lastSyncTime)} · Reconnect to edit",
+                            color = InkSoft,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            TextButton(
+                onClick = onSyncNow,
+                enabled = !refreshing,
+            ) {
+                if (refreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = if (isStale) Danger else Coral,
+                    )
+                } else {
+                    Text(
+                        "Sync now",
+                        color = if (isStale) Danger else Coral,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExportItineraryDialog(
+    trip: TripRecord,
+    items: List<ItineraryItem>,
+    members: List<TripMember>,
+    onDismiss: () -> Unit,
+    onShare: ((String) -> Unit)?,
+    analytics: TripTandemAnalytics,
+) {
+    var format by remember { mutableStateOf(ExportFormat.PlainText) }
+    var includeNotes by remember { mutableStateOf(false) }
+    var includeLodging by remember { mutableStateOf(false) }
+    var includeMemberNames by remember { mutableStateOf(false) }
+    var includeLocations by remember { mutableStateOf(true) }
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        analytics.logEvent(
+            TripTandemAnalytics.Events.EXPORT_STARTED,
+            mapOf("format" to if (format == ExportFormat.PlainText) "plain_text" else "markdown"),
+        )
+    }
+
+    val options = remember(format, includeNotes, includeLodging, includeMemberNames, includeLocations) {
+        ExportOptions(
+            format = format,
+            includeNotes = includeNotes,
+            includeLodgingDetails = includeLodging,
+            includeMemberInitials = includeMemberNames,
+            includePlaces = includeLocations,
+        )
+    }
+
+    val summaryText = remember(trip, items, members, options) {
+        ItineraryExporter.generateSummary(trip, items, members, options)
+    }
+
+    val includedFieldCount = listOf(includeNotes, includeLodging, includeMemberNames, includeLocations).count { it }
+
+    fun logCompleted() {
+        analytics.logEvent(
+            TripTandemAnalytics.Events.EXPORT_COMPLETED,
+            mapOf(
+                "format" to if (format == ExportFormat.PlainText) "plain_text" else "markdown",
+                "included_field_count" to includedFieldCount.toString(),
+            ),
+        )
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.9f),
+            shape = RoundedCornerShape(24.dp),
+            color = Color.White,
+            shadowElevation = 8.dp,
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Export Itinerary", style = MaterialTheme.typography.titleLarge)
+                    IconButton(onClick = onDismiss) {
+                        Text("✕", style = MaterialTheme.typography.titleMedium, color = InkMuted)
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip(
+                        label = "Plain text",
+                        selected = format == ExportFormat.PlainText,
+                        onClick = {
+                            format = ExportFormat.PlainText
+                            analytics.logEvent(
+                                TripTandemAnalytics.Events.EXPORT_STARTED,
+                                mapOf("format" to "plain_text"),
+                            )
+                        },
+                    )
+                    ChoiceChip(
+                        label = "Markdown",
+                        selected = format == ExportFormat.Markdown,
+                        onClick = {
+                            format = ExportFormat.Markdown
+                            analytics.logEvent(
+                                TripTandemAnalytics.Events.EXPORT_STARTED,
+                                mapOf("format" to "markdown"),
+                            )
+                        },
+                    )
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxWidth().background(Cream, RoundedCornerShape(14.dp)).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "PRIVACY CONTROLS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkMuted,
+                    )
+                    ExportFieldCheckbox("Include private notes", includeNotes) { includeNotes = it }
+                    ExportFieldCheckbox("Include lodging details", includeLodging) { includeLodging = it }
+                    ExportFieldCheckbox("Include traveler names", includeMemberNames) { includeMemberNames = it }
+                    ExportFieldCheckbox("Include stop locations", includeLocations) { includeLocations = it }
+                    Text(
+                        "Notes, lodging, and traveler names are off by default to protect privacy.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkSoft,
+                    )
+                }
+
+                Text("PREVIEW", style = MaterialTheme.typography.labelSmall, color = InkMuted)
+                Surface(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Cream,
+                    border = BorderStroke(1.dp, CreamBorder),
+                ) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(12.dp),
+                    ) {
+                        item {
+                            Text(
+                                text = summaryText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Ink,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(summaryText))
+                            copied = true
+                            logCompleted()
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Coral),
+                    ) {
+                        Text(if (copied) "Copied!" else "Copy", color = Coral)
+                    }
+                    Button(
+                        onClick = {
+                            logCompleted()
+                            onShare?.invoke(summaryText)
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                    ) {
+                        Text("Share")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExportFieldCheckbox(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = Ink)
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = CheckboxDefaults.colors(checkedColor = Coral),
+        )
+    }
+}
+
+@Composable
+private fun OfflineStorageCard(
+    repositories: TripTandemRepositories,
+    analytics: TripTandemAnalytics,
+    userId: String?,
+) {
+    var cacheSizeBytes by remember(userId) { mutableStateOf<Long?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(userId) {
+        cacheSizeBytes = repositories.offlineCache.getCacheSizeBytes(userId)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, CreamBorder),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Offline Storage", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    formatBytes(cacheSizeBytes ?: 0L),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Coral,
+                )
+            }
+            Text(
+                "Locally encrypted cache of your joined trips and itineraries for offline travel.",
+                style = MaterialTheme.typography.bodySmall,
+                color = InkMuted,
+            )
+            OutlinedButton(
+                onClick = {
+                    clearing = true
+                    scope.launch {
+                        repositories.offlineCache.clearAll(userId, reason = "user_cleared")
+                        cacheSizeBytes = 0L
+                        clearing = false
+                    }
+                },
+                enabled = !clearing && (cacheSizeBytes ?: 0L) > 0L,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CreamBorder),
+            ) {
+                if (clearing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = InkMuted,
+                    )
+                } else {
+                    Text("Clear offline cache", color = if ((cacheSizeBytes ?: 0L) > 0L) Ink else InkMuted)
+                }
+            }
+        }
+    }
+}
+
+private fun formatSyncAge(lastSyncEpochMillis: Long?): String {
+    if (lastSyncEpochMillis == null || lastSyncEpochMillis <= 0L) return "not synced yet"
+    val diff = (currentEpochMillis() - lastSyncEpochMillis).coerceAtLeast(0L)
+    return when {
+        diff < 60_000L -> "just now"
+        diff < 3_600_000L -> "${diff / 60_000L}m ago"
+        diff < 86_400_000L -> "${diff / 3_600_000L}h ago"
+        else -> "${diff / 86_400_000L}d ago"
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 B"
+    return when {
+        bytes < 1024L -> "$bytes B"
+        bytes < 1024L * 1024L -> "${bytes / 1024L} KB"
+        else -> "${bytes / (1024L * 1024L)} MB"
     }
 }

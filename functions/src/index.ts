@@ -1,3 +1,4 @@
+import { cleanupCommunityAccount } from "./community";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
@@ -187,7 +188,9 @@ export const updateTrip = onCall(async (request) => {
   if (typeof expectedRevision !== "number" || !Number.isInteger(expectedRevision) || expectedRevision < 0) {
     throw new HttpsError("invalid-argument", "expectedRevision is invalid");
   }
-  const normalized = normalizeTripCreateInput(data.trip);
+  // Editing an open trip closes its projection until a fresh preview is reviewed.
+  const tripInput = asRecord(data.trip);
+  const normalized = normalizeTripCreateInput({ ...tripInput, visibility: tripInput.visibility === "open" ? "private" : tripInput.visibility });
   if (!normalized.ok) {
     throw new HttpsError("invalid-argument", `Invalid trip field: ${normalized.field}`);
   }
@@ -413,6 +416,7 @@ export const deleteAccountProfile = onCall(async (request) => {
   await assertNoActiveSharedOwnedTrips(uid);
   const cleanup = await cleanupServerOwnedData(uid);
   const tripCleanup = await cleanupOwnedTripData(uid);
+  await cleanupCommunityAccount(uid);
   const profileRef = db.doc(`users/${uid}`);
   const ownerTripsQuery = db.collection("trips").where("ownerId", "==", uid);
 
@@ -2029,6 +2033,8 @@ async function deleteTripSubcollections(tripRef: DocumentReference): Promise<num
  * allowance while a trip graph is being removed.
  */
 async function deleteTripServerOwnedData(tripId: string): Promise<number> {
+  await db.doc(`communityListings/${tripId}`).delete();
+  await db.doc(`communityClosures/${tripId}`).delete();
   const [generationJobs, generationLocks] = await Promise.all([
     db.collection("generationJobs").where("tripId", "==", tripId).get(),
     db.collection(GENERATION_LOCKS_COLLECTION).where("tripId", "==", tripId).get(),
@@ -2173,3 +2179,5 @@ async function bestEffortReleaseGenerationLock(uid: string, tripId: string, jobI
 export function normalizedInputHash(input: GenerationInput): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
+
+export { communityAction, moderateCommunity, communityTripChanged, communityMemberChanged, communityItineraryChanged, communityBlockChanged, communityRetention, communityPushCreated } from "./community";

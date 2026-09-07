@@ -58,6 +58,25 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.ageConfirmed == true;
     }
 
+    function blockActive(blockerId, blockedId) {
+      return exists(/databases/$(database)/documents/communityBlocks/$(blockerId)/targets/$(blockedId))
+        && get(/databases/$(database)/documents/communityBlocks/$(blockerId)/targets/$(blockedId)).data.active == true;
+    }
+
+    function noBlockWith(userId) {
+      return signedIn()
+        && !blockActive(request.auth.uid, userId)
+        && !blockActive(userId, request.auth.uid);
+    }
+
+    function inviteAfterBlock(data) {
+      return noBlockWith(data.createdBy)
+        && (!exists(/databases/$(database)/documents/communityBlocks/$(request.auth.uid)/targets/$(data.createdBy))
+          || data.createdAt > get(/databases/$(database)/documents/communityBlocks/$(request.auth.uid)/targets/$(data.createdBy)).data.lastBlockedAt)
+        && (!exists(/databases/$(database)/documents/communityBlocks/$(data.createdBy)/targets/$(request.auth.uid))
+          || data.createdAt > get(/databases/$(database)/documents/communityBlocks/$(data.createdBy)/targets/$(request.auth.uid)).data.lastBlockedAt);
+    }
+
     function validString(value, min, max) {
       return value is string && value.size() >= min && value.size() <= max;
     }
@@ -146,7 +165,7 @@ service cloud.firestore {
 
     function tripIsJoinable(tripId) {
       return tripExists(tripId)
-        && get(/databases/$(database)/documents/trips/$(tripId)).data.visibility in ['private', 'unlisted']
+        && get(/databases/$(database)/documents/trips/$(tripId)).data.visibility in ['private', 'unlisted', 'open']
         && get(/databases/$(database)/documents/trips/$(tripId)).data.status in ['planning', 'confirmed'];
     }
 
@@ -201,9 +220,9 @@ service cloud.firestore {
     // member path, so no direct owner-only counter mutation is allowed.
 
     function invitedMemberCountIncrease(tripId) {
-      return signedIn()
+      return activeMemberCountChangedBy(1)
+        && signedIn()
         && request.resource.data.ownerId == resource.data.ownerId
-        && activeMemberCountChangedBy(1)
         && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount
           <= getAfter(/databases/$(database)/documents/trips/$(tripId)).data.capacity
         && request.resource.data.revision == resource.data.revision + 1
@@ -219,9 +238,9 @@ service cloud.firestore {
     }
 
     function memberLeaveCountDecrease(tripId) {
-      return isTripMember(tripId)
+      return activeMemberCountChangedBy(-1)
+        && isTripMember(tripId)
         && request.resource.data.ownerId == resource.data.ownerId
-        && activeMemberCountChangedBy(-1)
         && request.resource.data.revision == resource.data.revision + 1
         && tripDetailsUnchangedForMembership()
         && getAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.status == 'removed';
@@ -306,7 +325,6 @@ service cloud.firestore {
         && validString(data.destinationTimezone, 1, 80)
         && data.datesFlexible is bool
         && data.visibility in ['private', 'unlisted', 'open']
-        && phaseOneTripVisibility(data)
         && data.capacity is int
         && data.capacity >= 2
         && data.capacity <= 12
@@ -495,6 +513,7 @@ service cloud.firestore {
       allow update: if hasActiveProfile()
         && isValidTrip(request.resource.data)
         && unchanged(['createdAt'])
+        && (request.resource.data.visibility != 'open' || resource.data.visibility == 'open')
         && !tripDeletionLockExists(tripId)
         // Capacity expansion and reactivation are checked by the trusted
         // updateTrip callable, which can evaluate verified entitlement and
@@ -503,13 +522,13 @@ service cloud.firestore {
         && (request.resource.data.capacity <= 6
           || request.resource.data.capacity == resource.data.capacity)
         && !(isActiveTrip(request.resource.data) && !isActiveTrip(resource.data))
-        && ((isTripEditor(tripId)
+        && (memberLeaveCountDecrease(tripId)
+          || invitedMemberCountIncrease(tripId)
+          || (isTripEditor(tripId)
           && (validOwnershipTransfer(tripId)
             || (unchanged(['ownerId', 'activeMemberCount'])
               && tripChangeAllowedForRole(tripId)
-              && request.resource.data.revision == resource.data.revision + 1)))
-          || invitedMemberCountIncrease(tripId)
-          || memberLeaveCountDecrease(tripId));
+              && request.resource.data.revision == resource.data.revision + 1))));
       // Parent deletes do not cascade into members, itinerary, invites, or
       // joinRequests. The organizer must use the deleteTrip callable, which
       // drains the complete graph before removing the root.
@@ -536,9 +555,11 @@ service cloud.firestore {
             && request.auth.uid == memberId
             && isValidMember(request.resource.data, memberId)
             && tripIsJoinable(tripId)
+            && noBlockWith(get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId)
             && request.resource.data.status == 'active'
             && 'inviteId' in request.resource.data
             && exists(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId))
+             && inviteAfterBlock(get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data)
              && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
              && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses < get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.maxUses
              && getAfter(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount == get(/databases/$(database)/documents/trips/$(tripId)).data.activeMemberCount + 1
@@ -560,9 +581,11 @@ service cloud.firestore {
               && resource.data.status == 'removed'
               && request.resource.data.status == 'active'
               && tripIsJoinable(tripId)
+            && noBlockWith(get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId)
               && 'inviteId' in request.resource.data
               && exists(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId))
-               && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
+               && inviteAfterBlock(get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data)
+             && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.role == request.resource.data.role
                && get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.uses < get(/databases/$(database)/documents/trips/$(tripId)/invites/$(request.resource.data.inviteId)).data.maxUses
                && tripMemberCountChangedBy(tripId, 1)
                && tripMemberCountWithinCapacity(tripId))
@@ -602,36 +625,25 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Phase 3 lifecycle is server-only: capacity, blocks, expiry, and moderation
+      // must be checked transactionally by communityAction.
       match /joinRequests/{requestId} {
-        allow create: if tripIsWritable(tripId) && hasActiveProfile()
-          && request.resource.data.applicantId == request.auth.uid
-          && isValidJoinRequest(request.resource.data)
-          && request.resource.data.status == 'pending';
-        allow get, list: if signedIn()
-          && (resource.data.applicantId == request.auth.uid || isTripOwner(tripId));
-        allow update: if (tripIsWritable(tripId) && hasActiveProfile() && isTripOwner(tripId)
-          && isValidJoinRequest(request.resource.data)
-          && unchanged(['applicantId', 'createdAt']))
-          || (tripIsWritable(tripId) && signedIn()
-            && resource.data.applicantId == request.auth.uid
-            && isValidJoinRequest(request.resource.data)
-            && unchanged(['applicantId', 'createdAt'])
-            && request.resource.data.status == 'withdrawn');
-        allow delete: if tripAllowsChildMutation(tripId)
-          && (isTripOwner(tripId)
-            || (signedIn() && resource.data.applicantId == request.auth.uid));
+        allow read, write: if false;
       }
 
       match /invites/{inviteId} {
         // Invite IDs are SHA-256 hashes of high-entropy raw tokens. Requiring
         // the stored hash to match the path makes invite resolution a direct
         // read and prevents collection enumeration.
-        allow get: if signedIn() && resource.data.tokenHash == inviteId;
+        allow get: if hasActiveProfile() && resource.data.tokenHash == inviteId
+          && inviteAfterBlock(resource.data);
         allow create: if tripAllowsChildMutation(tripId) && hasActiveProfile() && isTripOwner(tripId) && tripIsJoinable(tripId)
+            && noBlockWith(get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.tokenHash == inviteId
           && isValidInvite(request.resource.data);
         allow update: if tripAllowsChildMutation(tripId) && hasActiveProfile()
+          && inviteAfterBlock(resource.data)
           && isValidInvite(request.resource.data)
           && request.resource.data.tokenHash == inviteId
           && unchanged(['tokenHash', 'role', 'expiresAt', 'maxUses', 'createdBy',
@@ -670,12 +682,10 @@ service cloud.firestore {
     // Reports are write-only for end users. A trusted moderation service will
     // read and update them once moderation is implemented.
     match /reports/{reportId} {
-      allow create: if signedIn()
-        && request.resource.data.reporterId == request.auth.uid
-        && request.resource.data.status == 'open'
-        && isValidReport(request.resource.data);
-      allow read, update, delete: if false;
+      allow read, write: if false;
     }
+    // All community projections, activity, preferences, blocks and moderation
+    // records are server-only. Callable responses enforce bilateral concealment.
 
     match /{document=**} {
       allow read, write: if false;

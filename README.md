@@ -16,6 +16,7 @@ TripTandem is a Kotlin Multiplatform mobile app for planning a trip, finding com
 - [Phase 0 release checklist](docs/release-checklist.md)
 - [Phase 1 implementation status](docs/phase1-status.md)
 - [Phase 2 implementation status](docs/phase2-status.md)
+- [Manual end-to-end test guide (HTML)](docs/manual-e2e-guide.html)
 - [Interview guide and findings log](docs/interviews.md)
 - [Privacy disclosure draft](docs/privacy.md)
 - [Generated app icon](assets/brand/triptandem-app-icon-1024.png)

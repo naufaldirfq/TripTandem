@@ -8,6 +8,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
+import com.triptandem.data.AndroidEncryptedPayloadStorage
 import com.triptandem.data.FirebaseInviteRepository
 import com.triptandem.data.FirebaseIdentityRepository
 import com.triptandem.data.FirebaseItineraryRepository
@@ -16,6 +17,8 @@ import com.triptandem.data.FirebaseTravelerProfileRepository
 import com.triptandem.data.FirebaseTripMemberRepository
 import com.triptandem.data.FirebaseTripRepository
 import com.triptandem.shared.NoOpTripTandemAnalytics
+import com.triptandem.shared.ProtectedTripCacheRepository
+import com.triptandem.shared.StandardProtectedTripCacheRepository
 import com.triptandem.shared.TravelerProfileRepository
 import com.triptandem.shared.TripTandemAnalytics
 import com.triptandem.shared.TripRepository
@@ -38,6 +41,7 @@ internal class FirebaseRuntime private constructor(
     val inviteRepository: InviteRepository,
     val generationRepository: com.triptandem.shared.ItineraryGenerationRepository,
     val identityRepository: com.triptandem.shared.IdentityRepository,
+    val offlineCache: ProtectedTripCacheRepository,
     val remoteConfig: RemoteConfigRuntime?,
 ) {
     fun ensureAnonymousSession(onUserReady: (String) -> Unit = {}) {
@@ -67,6 +71,8 @@ internal class FirebaseRuntime private constructor(
         fun initialize(context: Context): FirebaseRuntime? {
             return runCatching {
                 FirebaseApp.initializeApp(context)
+                com.google.firebase.appcheck.FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory.getInstance())
                 val auth = FirebaseAuth.getInstance()
                 val firestore = FirebaseFirestore.getInstance()
                 val functions = FirebaseFunctions.getInstance("asia-southeast2")
@@ -76,20 +82,24 @@ internal class FirebaseRuntime private constructor(
                     setCustomKey("platform", "android")
                     setCustomKey("build_type", BuildConfig.BUILD_TYPE)
                 }
+                val tracker = FirebaseAnalyticsTracker(FirebaseAnalytics.getInstance(context))
+                val storage = AndroidEncryptedPayloadStorage(context)
+                val offlineCache = StandardProtectedTripCacheRepository(storage, tracker)
                 FirebaseRuntime(
-                    analytics = FirebaseAnalyticsTracker(FirebaseAnalytics.getInstance(context)),
+                    analytics = tracker,
                     auth = auth,
                     firestore = firestore,
-                    travelerProfileRepository = FirebaseTravelerProfileRepository(auth, firestore, functions),
-                    tripRepository = FirebaseTripRepository(auth, firestore, functions),
-                    itineraryRepository = FirebaseItineraryRepository(auth, firestore),
-                    memberRepository = FirebaseTripMemberRepository(auth, firestore, functions),
+                    travelerProfileRepository = FirebaseTravelerProfileRepository(auth, firestore, functions, offlineCache),
+                    tripRepository = FirebaseTripRepository(auth, firestore, functions, offlineCache),
+                    itineraryRepository = FirebaseItineraryRepository(auth, firestore, offlineCache),
+                    memberRepository = FirebaseTripMemberRepository(auth, firestore, functions, offlineCache),
                     inviteRepository = FirebaseInviteRepository(auth, firestore),
                     generationRepository = FirebaseItineraryGenerationRepository(auth, functions),
                     identityRepository = FirebaseIdentityRepository(
                         auth = auth,
                         activity = context as? android.app.Activity,
                     ),
+                    offlineCache = offlineCache,
                     remoteConfig = RemoteConfigRuntime.initialize(),
                 )
             }.onFailure { error ->

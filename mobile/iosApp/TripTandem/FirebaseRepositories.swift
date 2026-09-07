@@ -1760,5 +1760,25 @@ func makeFirebaseRepositories(
         tripDrafts: IOSTripDraftRepository(),
         generation: FirebaseItineraryGenerationRepositoryBridge(),
         generationDrafts: IOSTripGenerationDraftRepository(),
+        community: FirebaseCommunityRepositoryBridge(),
+        offlineCache: StandardProtectedTripCacheRepository(storage: InMemorySecurePayloadStorage(), analytics: nil),
     )
+}
+
+
+final class FirebaseCommunityRepositoryBridge: CommunityRepository {
+    func execute(operation: String, input: [String: String], completionHandler: @escaping (DataResult?, Error?) -> Void) {
+        run({
+            var payload = input
+            if operation == "preferences" && input["save"] == "true" {
+                if input["push"] == "true" { payload["push"] = try await IOSCommunityPush.shared.enable() ? "true" : "false" }
+                else { await IOSCommunityPush.shared.unregister() }
+            }
+            let response = try await Functions.functions(region: "asia-southeast2").httpsCallable("communityAction").call(["operation": operation, "input": payload])
+            guard let data = response.data as? [String: Any], let json = data["json"] as? String else {
+                throw NSError(domain: "community", code: 1)
+            }
+            return json as NSString
+        }, completion: completionHandler)
+    }
 }

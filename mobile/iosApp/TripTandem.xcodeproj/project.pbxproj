@@ -8,10 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		08BA11CEF21DE7A975D183E0 /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 888F5290CF9341D80B10289A /* FirebaseCrashlytics */; };
-		222499F7D88512C4FAE30D25 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = EC6B0260EE936E5BD1FB85BC /* GoogleSignIn */; };
+		222499F7D88512C4FAE30D25 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = C20A0F7C012F2067C6BDA14D /* FirebaseMessaging */; };
 		26FDAACCEA2C897EF2D5F36E /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 94572C63ACB7671C3D7FDF3C /* FirebaseCore */; };
 		2C9FEE7D28C41D2C63538254 /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = 088C77A0B6BE7FB9B9087756 /* FirebaseRemoteConfig */; };
+		3CB9368FAAA303C86AE459FF /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 30CC131D6E8693D92D6E8C64 /* FirebaseAppCheck */; };
 		41EDD7ED09032814BDF4ED76 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 6169C9CEB897055C57FC5E22 /* FirebaseFunctions */; };
+		4B67E3B7D633ECC8793588BB /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = EC6B0260EE936E5BD1FB85BC /* GoogleSignIn */; };
 		4E0A0B36ACD27DC793DBED3A /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 4D96D46AA0B0FE46DC5F86A1 /* FirebaseFirestore */; };
 		5926E57331847646E93CBD62 /* FirebaseRepositories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 414C7005F6CEB5C3597AAA04 /* FirebaseRepositories.swift */; };
 		5F45EDF798B34D1B083B28EC /* TripTandemApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98F72AC3A66B6FE28F9781B0 /* TripTandemApp.swift */; };
@@ -24,6 +26,7 @@
 
 /* Begin PBXFileReference section */
 		0FD058BC8494D50ADD4828E6 /* TripTandem.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TripTandem.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A2E4B3F807833FAF3627C76 /* GoogleService-Info.plist */ = {isa = PBXFileReference; explicitFileType = text.plist; lastKnownFileType = text.plist; name = "GoogleService-Info.plist"; path = "../GoogleService-Info.plist"; sourceTree = "<group>"; };
 		414C7005F6CEB5C3597AAA04 /* FirebaseRepositories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseRepositories.swift; sourceTree = "<group>"; };
 		68494D898DA11A90046A503C /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		7EF1CCB04434DB238B7FDFE1 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -50,7 +53,9 @@
 				4E0A0B36ACD27DC793DBED3A /* FirebaseFirestore in Frameworks */,
 				41EDD7ED09032814BDF4ED76 /* FirebaseFunctions in Frameworks */,
 				2C9FEE7D28C41D2C63538254 /* FirebaseRemoteConfig in Frameworks */,
-				222499F7D88512C4FAE30D25 /* GoogleSignIn in Frameworks */,
+				222499F7D88512C4FAE30D25 /* FirebaseMessaging in Frameworks */,
+				3CB9368FAAA303C86AE459FF /* FirebaseAppCheck in Frameworks */,
+				4B67E3B7D633ECC8793588BB /* GoogleSignIn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,6 +80,7 @@
 				68494D898DA11A90046A503C /* Signing.xcconfig */,
 				9EA61F232547358BEF9EFDBF /* TripTandem.entitlements */,
 				98F72AC3A66B6FE28F9781B0 /* TripTandemApp.swift */,
+				1A2E4B3F807833FAF3627C76 /* GoogleService-Info.plist */,
 			);
 			path = TripTandem;
 			sourceTree = "<group>";
@@ -124,6 +130,8 @@
 				4D96D46AA0B0FE46DC5F86A1 /* FirebaseFirestore */,
 				6169C9CEB897055C57FC5E22 /* FirebaseFunctions */,
 				088C77A0B6BE7FB9B9087756 /* FirebaseRemoteConfig */,
+				C20A0F7C012F2067C6BDA14D /* FirebaseMessaging */,
+				30CC131D6E8693D92D6E8C64 /* FirebaseAppCheck */,
 				EC6B0260EE936E5BD1FB85BC /* GoogleSignIn */,
 			);
 			productName = TripTandem;
@@ -274,6 +282,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.triptandem;
 				PRODUCT_NAME = TripTandem;
 				SDKROOT = iphoneos;
@@ -309,6 +320,9 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-ObjC",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.triptandem;
 				PRODUCT_NAME = TripTandem;
 				SDKROOT = iphoneos;
@@ -321,6 +335,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APS_ENVIRONMENT = development;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -393,6 +408,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APS_ENVIRONMENT = development;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -507,6 +523,11 @@
 			package = 9B059E282DEC35D0439982B3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebasePerformance;
 		};
+		30CC131D6E8693D92D6E8C64 /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B059E282DEC35D0439982B3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
 		4D96D46AA0B0FE46DC5F86A1 /* FirebaseFirestore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9B059E282DEC35D0439982B3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
@@ -531,6 +552,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 9B059E282DEC35D0439982B3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAnalytics;
+		};
+		C20A0F7C012F2067C6BDA14D /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B059E282DEC35D0439982B3 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
 		};
 		D27F9394943731943DE90F64 /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;

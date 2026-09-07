@@ -18,6 +18,30 @@ interface TripTandemAnalytics {
     }
 
     object Events {
+        const val OPEN_PUBLISH_STARTED = "open_publish_started"
+        const val OPEN_PUBLISH_COMPLETED = "open_publish_completed"
+        const val DISCOVER_SEARCH_PERFORMED = "discover_search_performed"
+        const val DISCOVER_RESULT_OPENED = "discover_result_opened"
+        const val DISCOVER_EMPTY_VIEWED = "discover_empty_viewed"
+        const val OPEN_TRIP_CLOSED = "open_trip_closed"
+        const val COMPATIBILITY_VIEWED = "compatibility_viewed"
+        const val JOIN_REQUEST_STARTED = "join_request_started"
+        const val JOIN_REQUEST_SUBMITTED = "join_request_submitted"
+        const val JOIN_REQUEST_WITHDRAWN = "join_request_withdrawn"
+        const val JOIN_REQUEST_REVIEWED = "join_request_reviewed"
+        const val JOIN_REQUEST_INVALIDATED = "join_request_invalidated"
+        const val SAFETY_CONTROL_OPENED = "safety_control_opened"
+        const val BLOCK_COMPLETED = "block_completed"
+        const val REPORT_SUBMITTED = "report_submitted"
+        const val PUBLIC_CONTENT_HELD = "public_content_held"
+        const val MODERATION_ACTIONED = "moderation_actioned"
+        const val NOTIFICATION_PERMISSION_PROMPTED = "notification_permission_prompted"
+        const val NOTIFICATION_PERMISSION_RESULT = "notification_permission_result"
+        const val NOTIFICATION_CREATED = "notification_created"
+        const val NOTIFICATION_OPENED = "notification_opened"
+        const val ACTIVITY_ACTION_COMPLETED = "activity_action_completed"
+        const val NOTIFICATION_PREFERENCE_CHANGED = "notification_preference_changed"
+
         const val SCREEN_VIEW = "screen_view"
         const val AUTH_ANONYMOUS_SUCCEEDED = "auth_anonymous_succeeded"
         const val AUTH_ANONYMOUS_FAILED = "auth_anonymous_failed"
@@ -68,6 +92,11 @@ interface TripTandemAnalytics {
         const val GENERATION_APPLIED = "generation_applied"
         const val GENERATION_FAILED = "generation_failed"
         const val GENERATION_PAYWALL_VIEWED = "generation_paywall_viewed"
+        const val OFFLINE_CACHE_READ = "offline_cache_read"
+        const val OFFLINE_REFRESH_COMPLETED = "offline_refresh_completed"
+        const val EXPORT_STARTED = "export_started"
+        const val EXPORT_COMPLETED = "export_completed"
+        const val PROTECTED_CACHE_CLEARED = "protected_cache_cleared"
     }
 }
 

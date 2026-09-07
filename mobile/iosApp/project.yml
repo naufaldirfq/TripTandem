@@ -19,6 +19,7 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    APS_ENVIRONMENT: development
     SWIFT_ENABLE_EXPLICIT_MODULES: NO
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     TARGETED_DEVICE_FAMILY: "1,2"
@@ -39,6 +40,7 @@ targets:
     entitlements:
       path: TripTandem/TripTandem.entitlements
       properties:
+        aps-environment: "$(APS_ENVIRONMENT)"
         com.apple.developer.applesignin:
           - Default
     sources:
@@ -64,6 +66,10 @@ targets:
         product: FirebaseFunctions
       - package: Firebase
         product: FirebaseRemoteConfig
+      - package: Firebase
+        product: FirebaseMessaging
+      - package: Firebase
+        product: FirebaseAppCheck
       - package: GoogleSignIn
         product: GoogleSignIn
     preBuildScripts:

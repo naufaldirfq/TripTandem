@@ -471,11 +471,14 @@ data class TripTandemRepositories(
     val tripDrafts: TripDraftRepository = NoOpTripDraftRepository,
     val generation: ItineraryGenerationRepository = UnavailableItineraryGenerationRepository,
     val generationDrafts: ItineraryGenerationDraftRepository = NoOpItineraryGenerationDraftRepository,
+    val community: CommunityRepository = UnavailableCommunityRepository,
+    val offlineCache: ProtectedTripCacheRepository = NoOpProtectedTripCacheRepository,
 ) {
     companion object {
         fun local(): TripTandemRepositories {
             val store = InMemoryTripTandemStore()
-            return TripTandemRepositories(store, store, store, store, store)
+            val cache = StandardProtectedTripCacheRepository(InMemorySecurePayloadStorage())
+            return TripTandemRepositories(store, store, store, store, store, offlineCache = cache)
         }
     }
 }

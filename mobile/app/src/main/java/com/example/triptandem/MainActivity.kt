@@ -1,5 +1,7 @@
 package com.triptandem
 
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -23,6 +25,11 @@ class MainActivity : ComponentActivity() {
   private var revenueCatCoordinator by mutableStateOf<RevenueCatCoordinator?>(null)
   private var firebaseRuntime: FirebaseRuntime? = null
   private var connectivityMonitor: AndroidConnectivityMonitor? = null
+
+  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode == 7309) CommunityPushRuntime.permissionResult(grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED)
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -50,6 +57,7 @@ class MainActivity : ComponentActivity() {
       featureFlags = flags
     }
 
+    if (intent?.getStringExtra("community_activity") != null) com.triptandem.shared.CommunityNavigation.openActivity()
     setContent {
       TripTandemApp(
         typography = tripTandemAndroidTypography(),
@@ -65,9 +73,11 @@ class MainActivity : ComponentActivity() {
                 members = it.memberRepository,
                 invites = it.inviteRepository,
                 generation = it.generationRepository,
+                community = com.triptandem.data.FirebaseCommunityRepository(com.google.firebase.functions.FirebaseFunctions.getInstance("asia-southeast2"), this@MainActivity),
                 identity = it.identityRepository,
                 tripDrafts = AndroidTripDraftRepository(this@MainActivity),
                 generationDrafts = AndroidItineraryGenerationDraftRepository(this@MainActivity),
+                offlineCache = it.offlineCache,
             )
         }
         },
@@ -82,11 +92,27 @@ class MainActivity : ComponentActivity() {
             ),
           )
         },
+        onShareExport = { summary ->
+          startActivity(
+            Intent.createChooser(
+              Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, summary)
+              },
+              "Share itinerary",
+            ),
+          )
+        },
         pendingInvite = pendingInvite,
         onSignOut = {
-          firebase?.auth?.signOut()
-          firebase?.ensureAnonymousSession { userId ->
-            revenueCatCoordinator = RevenueCatRuntime.initialize(userId)
+          lifecycleScope.launch {
+            CommunityPushRuntime.unregister(this@MainActivity)
+            val currentUid = firebase?.auth?.currentUser?.uid
+            if (currentUid != null) {
+              firebase?.offlineCache?.clearAll(currentUid, reason = "sign_out")
+            }
+            firebase?.auth?.signOut()
+            firebase?.ensureAnonymousSession { userId -> revenueCatCoordinator = RevenueCatRuntime.initialize(userId) }
           }
         },
         onOpenExternalUrl = { url ->
@@ -112,6 +138,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
+    if (intent.getStringExtra("community_activity") != null) com.triptandem.shared.CommunityNavigation.openActivity()
     setIntent(intent)
     pendingInvite = intent.toPendingInvite()
   }

@@ -3,6 +3,10 @@ import UIKit
 import FirebaseAnalytics
 import FirebaseAuth
 import FirebaseCore
+import FirebaseAppCheck
+import FirebaseMessaging
+import FirebaseFunctions
+import UserNotifications
 import FirebaseCrashlytics
 import FirebaseRemoteConfig
 import GoogleSignIn
@@ -55,9 +59,12 @@ private struct TripTandemSharedView: UIViewControllerRepresentable {
             revenueCat: revenueCat,
             featureFlags: featureFlags,
             onSignOut: {
-                GIDSignIn.sharedInstance.signOut()
-                try? Auth.auth().signOut()
-                Auth.auth().signInAnonymously(completion: nil)
+                Task {
+                    await IOSCommunityPush.shared.unregister()
+                    GIDSignIn.sharedInstance.signOut()
+                    try? Auth.auth().signOut()
+                    Auth.auth().signInAnonymously(completion: nil)
+                }
             },
             onOpenExternalUrl: onOpenExternalUrl,
             onManageSubscription: {
@@ -65,6 +72,15 @@ private struct TripTandemSharedView: UIViewControllerRepresentable {
                 UIApplication.shared.open(url)
             },
             connectivity: connectivity,
+            onShareExport: { summary in
+                let activityVC = UIActivityViewController(activityItems: [summary], applicationActivities: nil)
+                if let popover = activityVC.popoverPresentationController, let sourceView = presenterBox.controller?.view {
+                    popover.sourceView = sourceView
+                    popover.sourceRect = CGRect(x: sourceView.bounds.midX, y: sourceView.bounds.midY, width: 0, height: 0)
+                    popover.permittedArrowDirections = []
+                }
+                presenterBox.controller?.present(activityVC, animated: true)
+            }
         )
         presenterBox.controller = controller
         return controller
@@ -111,6 +127,30 @@ private final class FirebaseAnalyticsBridge: NSObject, TripTandemAnalytics {
     }
 
     private static let allowedEvents: Set<String> = [
+        "open_publish_started",
+        "open_publish_completed",
+        "discover_search_performed",
+        "discover_result_opened",
+        "discover_empty_viewed",
+        "open_trip_closed",
+        "compatibility_viewed",
+        "join_request_started",
+        "join_request_submitted",
+        "join_request_withdrawn",
+        "join_request_reviewed",
+        "join_request_invalidated",
+        "safety_control_opened",
+        "block_completed",
+        "report_submitted",
+        "public_content_held",
+        "moderation_actioned",
+        "notification_permission_prompted",
+        "notification_permission_result",
+        "notification_created",
+        "notification_opened",
+        "activity_action_completed",
+        "notification_preference_changed",
+
         "screen_view", "auth_anonymous_succeeded", "auth_anonymous_failed", "auth_session_restored",
         "sign_up_started", "sign_up_completed", "profile_essentials_completed", "profile_optional_completed",
         "profile_preview_opened", "account_deletion_started", "account_deletion_completed",
@@ -125,6 +165,7 @@ private final class FirebaseAnalyticsBridge: NSObject, TripTandemAnalytics {
         "purchase_failed", "restore_started", "restore_completed", "entitlement_changed",
         "generation_started", "generation_completed", "generation_preview_edited", "generation_applied",
         "generation_failed", "generation_paywall_viewed",
+        "offline_cache_read", "offline_refresh_completed", "export_started", "export_completed", "protected_cache_cleared",
     ]
 
     private static let allowedScreenNames: Set<String> = [
@@ -133,6 +174,30 @@ private final class FirebaseAnalyticsBridge: NSObject, TripTandemAnalytics {
     ]
 
     private static let allowedParameters: [String: Set<String>] = [
+        "open_publish_started": [],
+        "open_publish_completed": ["capacity_bucket", "trip_length_bucket"],
+        "discover_search_performed": ["result_count_bucket", "filter_count"],
+        "discover_result_opened": ["rank_bucket", "reason_count"],
+        "discover_empty_viewed": ["filter_count"],
+        "open_trip_closed": ["reason_class"],
+        "compatibility_viewed": ["label", "reason_count", "missing_field_count"],
+        "join_request_started": [],
+        "join_request_submitted": ["intro_length_bucket"],
+        "join_request_withdrawn": ["age_bucket"],
+        "join_request_reviewed": ["decision", "age_bucket", "capacity_bucket"],
+        "join_request_invalidated": ["reason_class"],
+        "safety_control_opened": ["source"],
+        "block_completed": ["context"],
+        "report_submitted": ["category", "subject_type"],
+        "public_content_held": ["reason_class"],
+        "moderation_actioned": ["action_class", "severity"],
+        "notification_permission_prompted": ["context"],
+        "notification_permission_result": ["result"],
+        "notification_created": ["type", "channel"],
+        "notification_opened": ["type", "age_bucket"],
+        "activity_action_completed": ["type"],
+        "notification_preference_changed": ["category", "enabled"],
+
         "screen_view": ["screen_name"],
         "auth_anonymous_failed": ["error_type"],
         "sign_up_started": ["method"],
@@ -165,6 +230,11 @@ private final class FirebaseAnalyticsBridge: NSObject, TripTandemAnalytics {
         "generation_applied": ["selected_count_bucket", "duplicate_warning"],
         "generation_failed": ["failure_class"],
         "generation_paywall_viewed": ["trigger"],
+        "offline_cache_read": ["freshness_bucket"],
+        "offline_refresh_completed": ["result"],
+        "export_started": ["format"],
+        "export_completed": ["format", "included_field_count"],
+        "protected_cache_cleared": ["reason"],
     ]
 }
 
@@ -215,7 +285,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, ObservableObject {
 
     private func configureFirebase() {
         if FirebaseApp.app() == nil {
+            AppCheck.setAppCheckProviderFactory(TripAppCheckFactory())
             FirebaseApp.configure()
+            IOSCommunityPush.shared.configure()
         }
     }
 
@@ -368,4 +440,57 @@ final class IOSConnectivityMonitor: ObservableObject {
         pathMonitor.cancel()
         monitor.close()
     }
+}
+
+
+final class TripAppCheckFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? { AppAttestProvider(app: app) }
+}
+
+
+final class IOSCommunityPush: NSObject, MessagingDelegate, UNUserNotificationCenterDelegate {
+    static let shared = IOSCommunityPush()
+    private var installation: String {
+        if let value = UserDefaults.standard.string(forKey: "communityInstallation") { return value }
+        let value = UUID().uuidString
+        UserDefaults.standard.set(value, forKey: "communityInstallation")
+        return value
+    }
+    func configure() {
+        Messaging.messaging().isAutoInitEnabled = false
+        Messaging.messaging().delegate = self
+        UNUserNotificationCenter.current().delegate = self
+    }
+    @MainActor func enable() async throws -> Bool {
+        let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+        guard granted else { return false }
+        UserDefaults.standard.set(true, forKey: "communityPushEnabled")
+        UserDefaults.standard.set(Auth.auth().currentUser?.uid, forKey: "communityPushOwner")
+        Messaging.messaging().isAutoInitEnabled = true
+        UIApplication.shared.registerForRemoteNotifications()
+        // APNs registration completes asynchronously; the Messaging delegate uploads the token.
+        if let token = Messaging.messaging().fcmToken { try await register(token) }
+        return true
+    }
+    func register(_ token: String) async throws {
+        guard Auth.auth().currentUser != nil, Auth.auth().currentUser?.uid == UserDefaults.standard.string(forKey: "communityPushOwner"), UserDefaults.standard.bool(forKey: "communityPushEnabled") else { return }
+        _ = try await Functions.functions(region: "asia-southeast2").httpsCallable("communityAction").call(["operation": "register_installation", "input": ["installationId": installation, "token": token, "platform": "ios"]])
+    }
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        if let token = fcmToken { Task { try? await register(token) } }
+    }
+    func unregister() async {
+        UserDefaults.standard.set(false, forKey: "communityPushEnabled")
+        Messaging.messaging().isAutoInitEnabled = false
+        _ = try? await Functions.functions(region: "asia-southeast2").httpsCallable("communityAction").call(["operation": "unregister_installation", "input": ["installationId": installation]])
+        try? await Messaging.messaging().deleteToken()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.content.userInfo["community_activity"] != nil {
+            DispatchQueue.main.async { CommunityNavigation.shared.openActivity() }
+        }
+        completionHandler()
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) { completionHandler([]) }
 }

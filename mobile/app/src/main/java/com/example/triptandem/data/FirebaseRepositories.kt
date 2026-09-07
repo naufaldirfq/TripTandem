@@ -51,6 +51,7 @@ import com.triptandem.shared.TripStatus
 import com.triptandem.shared.TripTandemError
 import com.triptandem.shared.TripVisibility
 import com.triptandem.shared.TravelerProfileRepository
+import com.triptandem.shared.ProtectedTripCacheRepository
 import com.triptandem.shared.IdentityRepository
 import com.triptandem.shared.UpdateItineraryItemInput
 import com.triptandem.shared.UpdateTripInput
@@ -188,6 +189,7 @@ class FirebaseTravelerProfileRepository(
     private val auth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
     private val functions: FirebaseFunctions,
+    private val offlineCache: ProtectedTripCacheRepository? = null,
 ) : TravelerProfileRepository {
     override suspend fun getCurrentProfile(): DataResult<TravelerProfile?> {
         val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
@@ -218,7 +220,7 @@ class FirebaseTravelerProfileRepository(
 
     override suspend fun deleteCurrentAccount(): DataResult<Unit> {
         val user = auth.currentUser ?: return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val result = repositoryCall {
             val lastSignIn = user.metadata?.lastSignInTimestamp
             if (lastSignIn != null && System.currentTimeMillis() - lastSignIn > RECENT_AUTH_WINDOW_MILLIS) {
                 throw RecentLoginRequiredException
@@ -246,7 +248,12 @@ class FirebaseTravelerProfileRepository(
             } catch (error: FirebaseAuthRecentLoginRequiredException) {
                 throw error
             }
+            Unit
         }
+        if (result is DataResult.Success) {
+            offlineCache?.clearAll(user.uid, reason = "account_deletion")
+        }
+        return result
     }
 }
 
@@ -255,10 +262,11 @@ class FirebaseTripRepository(
     private val auth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
     private val functions: FirebaseFunctions,
+    private val offlineCache: ProtectedTripCacheRepository? = null,
 ) : TripRepository {
     override suspend fun listMyTrips(): DataResult<List<TripRecord>> {
         val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val result = repositoryCall {
             val owned = firestore.collection(TRIPS_COLLECTION)
                 .whereEqualTo("ownerId", uid)
                 .get()
@@ -278,47 +286,91 @@ class FirebaseTripRepository(
                 snapshot.takeIf { it.exists() }?.toTripRecord(id)
             }
         }
+        return when (result) {
+            is DataResult.Success -> {
+                offlineCache?.let { cache ->
+                    result.value.forEach { trip ->
+                        cache.updateCachedTrip(trip, uid)
+                    }
+                }
+                result
+            }
+            is DataResult.Failure -> {
+                if (result.error is TripTandemError.Offline && offlineCache != null) {
+                    val cached = offlineCache.getCachedTrips(uid)
+                    if (cached.isNotEmpty()) {
+                        DataResult.Success(cached)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
+        }
     }
 
     override suspend fun createTrip(input: CreateTripInput): DataResult<TripRecord> {
         val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
         input.validationError()?.let { return DataResult.Failure(it) }
-        return repositoryCall {
+        val result = repositoryCall {
             // Active-trip creation is intentionally routed through the
             // server transaction. It evaluates the owner's existing active
             // trips and verified RevenueCat webhook state atomically; the
             // Firestore client cannot bypass the free-plan limit.
-            val result = functions.getHttpsCallable("createTrip")
+            val callResult = functions.getHttpsCallable("createTrip")
                 .call(input.toCallableMap())
                 .await()
-            val map = result.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
+            val map = callResult.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
             val tripId = map["tripId"] as? String ?: throw IllegalStateException("trip_id_missing")
             val reference = firestore.collection(TRIPS_COLLECTION).document(tripId)
             val snapshot = reference.get().await()
             if (!snapshot.exists()) throw MissingDocumentException
             snapshot.toTripRecord(tripId)
         }
+        if (result is DataResult.Success) {
+            offlineCache?.updateCachedTrip(result.value, uid)
+        }
+        return result
     }
 
     override suspend fun getTrip(tripId: String): DataResult<TripRecord> {
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        if (auth.currentUser == null) return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
+        val result = repositoryCall {
             val snapshot = firestore.collection(TRIPS_COLLECTION).document(tripId).get().await()
             if (!snapshot.exists()) throw MissingDocumentException
             snapshot.toTripRecord(tripId)
+        }
+        return when (result) {
+            is DataResult.Success -> {
+                offlineCache?.updateCachedTrip(result.value, uid)
+                result
+            }
+            is DataResult.Failure -> {
+                if (result.error is TripTandemError.Offline && offlineCache != null) {
+                    val bundle = offlineCache.getCachedTripBundle(uid, tripId)
+                    if (bundle != null) {
+                        DataResult.Success(bundle.trip)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
         }
     }
 
     override suspend fun updateTrip(tripId: String, input: UpdateTripInput): DataResult<TripRecord> {
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        if (auth.currentUser == null) return DataResult.Failure(TripTandemError.Unauthenticated)
+        val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
         input.validationError()?.let { return DataResult.Failure(it) }
-        return repositoryCall {
+        val result = repositoryCall {
             // Trip updates go through the same regional transaction as create:
             // status reactivation, capacity expansion, and the revision check
             // cannot be bypassed by a direct Firestore write.
-            val result = functions.getHttpsCallable("updateTrip")
+            val callResult = functions.getHttpsCallable("updateTrip")
                 .call(
                     mapOf(
                         "tripId" to tripId,
@@ -327,28 +379,36 @@ class FirebaseTripRepository(
                     ),
                 )
                 .await()
-            val map = result.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
+            val map = callResult.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
             val updatedTripId = map["tripId"] as? String ?: tripId
             if (updatedTripId != tripId) throw IllegalStateException("trip_id_mismatch")
             val reference = firestore.collection(TRIPS_COLLECTION).document(tripId)
             reference.get().await().toTripRecord(updatedTripId)
         }
+        if (result is DataResult.Success) {
+            offlineCache?.updateCachedTrip(result.value, uid)
+        }
+        return result
     }
 
     override suspend fun deleteTrip(tripId: String): DataResult<Unit> {
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        if (auth.currentUser == null) return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
+        val result = repositoryCall {
             // Firestore parent deletes do not cascade into the trip graph. Use
             // the regional callable so the server locks the trip, drains all
             // known subcollections, and only then removes the root.
-            val result = functions.getHttpsCallable("deleteTrip")
+            val callResult = functions.getHttpsCallable("deleteTrip")
                 .call(mapOf("tripId" to tripId))
                 .await()
-            val map = result.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
+            val map = callResult.data as? Map<*, *> ?: throw IllegalStateException("invalid_trip_response")
             val returnedTripId = map["tripId"] as? String ?: throw IllegalStateException("trip_id_missing")
             if (returnedTripId != tripId) throw IllegalStateException("trip_id_mismatch")
         }
+        if (result is DataResult.Success) {
+            offlineCache?.removeTrip(uid, tripId)
+        }
+        return result
     }
 }
 
@@ -688,16 +748,35 @@ private fun accountStatusFromWire(value: String): AccountStatus =
 class FirebaseItineraryRepository(
     private val auth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
+    private val offlineCache: ProtectedTripCacheRepository? = null,
 ) : ItineraryRepository {
     override suspend fun listItems(tripId: String): DataResult<List<ItineraryItem>> {
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        if (auth.currentUser == null) return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
+        val result = repositoryCall {
             firestore.collection(TRIPS_COLLECTION).document(tripId)
                 .collection(ITINERARY_SUBCOLLECTION)
                 .orderBy("position")
                 .get().await().documents.map { it.toItineraryItem(tripId) }
                 .filter { it.deletedAtEpochMillis == null }
+        }
+        return when (result) {
+            is DataResult.Success -> {
+                offlineCache?.updateCachedItems(tripId, result.value, uid)
+                result
+            }
+            is DataResult.Failure -> {
+                if (result.error is TripTandemError.Offline && offlineCache != null) {
+                    val bundle = offlineCache.getCachedTripBundle(uid, tripId)
+                    if (bundle != null) {
+                        DataResult.Success(bundle.items)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
         }
     }
 
@@ -779,23 +858,58 @@ class FirebaseTripMemberRepository(
     private val auth: FirebaseAuth,
     private val firestore: FirebaseFirestore,
     private val functions: FirebaseFunctions,
+    private val offlineCache: ProtectedTripCacheRepository? = null,
 ) : TripMemberRepository {
     override suspend fun listMembers(tripId: String): DataResult<List<TripMember>> {
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        if (auth.currentUser == null) return DataResult.Failure(TripTandemError.Unauthenticated)
-        return repositoryCall {
+        val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
+        val result = repositoryCall {
             firestore.collection(TRIPS_COLLECTION).document(tripId)
                 .collection(MEMBERS_SUBCOLLECTION).get().await().documents.map { it.toTripMember(tripId) }
+        }
+        return when (result) {
+            is DataResult.Success -> {
+                offlineCache?.updateCachedMembers(tripId, result.value, uid)
+                result
+            }
+            is DataResult.Failure -> {
+                if (result.error is TripTandemError.Offline && offlineCache != null) {
+                    val bundle = offlineCache.getCachedTripBundle(uid, tripId)
+                    if (bundle != null) {
+                        DataResult.Success(bundle.members)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
         }
     }
 
     override suspend fun getCurrentMember(tripId: String): DataResult<TripMember?> {
         val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        return repositoryCall {
+        val result = repositoryCall {
             val snapshot = firestore.collection(TRIPS_COLLECTION).document(tripId)
                 .collection(MEMBERS_SUBCOLLECTION).document(uid).get().await()
             if (!snapshot.exists()) null else snapshot.toTripMember(tripId)
+        }
+        return when (result) {
+            is DataResult.Success -> result
+            is DataResult.Failure -> {
+                if (result.error is TripTandemError.Offline && offlineCache != null) {
+                    val bundle = offlineCache.getCachedTripBundle(uid, tripId)
+                    if (bundle != null) {
+                        val member = bundle.members.firstOrNull { it.userId == uid }
+                        DataResult.Success(member)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
+                }
+            }
         }
     }
 
@@ -810,22 +924,29 @@ class FirebaseTripMemberRepository(
     }
 
     override suspend fun removeMember(tripId: String, userId: String): DataResult<Unit> {
-        auth.currentUser ?: return DataResult.Failure(TripTandemError.Unauthenticated)
+        val currentUid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
         if (tripId.isBlank() || userId.isBlank()) return DataResult.Failure(TripTandemError.Validation("member"))
-        return repositoryCall {
+        val result = repositoryCall {
             // A parent trip counter cannot be safely paired with an arbitrary
             // member path in client-side Firestore Rules. The regional callable
             // performs the owner check and both writes in one Admin transaction.
             functions.getHttpsCallable("removeTripMember")
                 .call(mapOf("tripId" to tripId, "userId" to userId))
                 .await()
+            Unit
         }
+        if (result is DataResult.Success) {
+            if (userId == currentUid) {
+                offlineCache?.removeTrip(currentUid, tripId)
+            }
+        }
+        return result
     }
 
     override suspend fun leaveTrip(tripId: String): DataResult<Unit> {
         val uid = auth.currentUser?.uid ?: return DataResult.Failure(TripTandemError.Unauthenticated)
         if (tripId.isBlank()) return DataResult.Failure(TripTandemError.Validation("tripId"))
-        return repositoryCall {
+        val result = repositoryCall {
             val tripReference = firestore.collection(TRIPS_COLLECTION).document(tripId)
             val memberReference = tripReference.collection(MEMBERS_SUBCOLLECTION).document(uid)
             firestore.runTransaction { transaction ->
@@ -847,6 +968,10 @@ class FirebaseTripMemberRepository(
                 null
             }.await()
         }
+        if (result is DataResult.Success) {
+            offlineCache?.removeTrip(uid, tripId)
+        }
+        return result
     }
 
     override suspend fun transferOwnership(tripId: String, newOwnerId: String): DataResult<Unit> {

@@ -55,8 +55,13 @@ metadata, never user-generated trip/profile content.
 | `generation_applied` | `selected_count_bucket`, `duplicate_warning` | suggestions applied to itinerary |
 | `generation_failed` | coarse `failure_class` | AI job failed or timed out |
 | `generation_paywall_viewed` | coarse `trigger` | AI allowance gate viewed |
+| `offline_cache_read` | bounded `freshness_bucket` | protected offline trip cache read |
+| `offline_refresh_completed` | coarse `result` | manual or reconnect refresh attempted |
+| `export_started` | bounded `format` | itinerary export preview opened |
+| `export_completed` | bounded `format`, bounded `included_field_count` | itinerary summary shared or copied |
+| `protected_cache_cleared` | bounded `reason` | protected local cache wiped |
 
-The Phase 2 purchase and generation events above are implemented in the shared
+The Phase 2 purchase and generation events and Phase 4 offline/export events above are implemented in the shared
 UI and forwarded through platform allowlists. They remain intentionally coarse:
 no purchase receipt, transaction ID, prompt, destination, dates, notes, or
 generated text is included.

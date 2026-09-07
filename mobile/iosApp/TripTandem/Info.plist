@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
@@ -18,14 +20,6 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
-	<key>CADisableMinimumFrameDurationOnPhone</key>
-	<true/>
-	<key>RevenueCatPublicAPIKey</key>
-	<string>$(REVENUECAT_PUBLIC_API_KEY)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -38,6 +32,14 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>FirebaseMessagingAutoInitEnabled</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>RevenueCatPublicAPIKey</key>
+	<string>$(REVENUECAT_PUBLIC_API_KEY)</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
